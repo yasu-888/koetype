@@ -1,0 +1,218 @@
+/** @format */
+
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap");
+
+/* 基本的なリセットはTailwindのPreflightに任せるか、html/bodyに限定する */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  background: transparent;
+}
+
+/* フォーム要素の基本スタイル */
+input,
+select,
+button {
+  font-family: inherit;
+}
+
+/* スクロールバーのカスタマイズ */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Floating UI (Swift overlay parity) */
+.floating-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-family: "SF Pro Display", "SF Pro Text", "Hiragino Kaku Gothic ProN", "Segoe UI", sans-serif;
+  pointer-events: none;
+  transition: transform 0.12s ease;
+  transform-origin: 50% 100%;
+}
+
+.floating-shell-interactive {
+  pointer-events: auto;
+}
+
+.floating-active-card {
+  width: 100%;
+  height: 100%;
+  border-radius: 26px;
+  background: rgba(0, 0, 0, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  overflow: hidden;
+  transform-origin: 50% 100%;
+}
+
+.floating-active-card-spectrum {
+  border-radius: 20px;
+  border: 1mm solid rgba(0, 0, 0, 0.98);
+  box-sizing: border-box;
+}
+
+.floating-show {
+  transform: scale(1);
+}
+
+.floating-hide {
+  transform: scale(0.68);
+}
+
+.floating-active-body {
+  padding: 20px 24px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.floating-active-body-spectrum {
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.floating-active-body-spectrum.with-message {
+  padding: 10px 14px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.floating-error-message {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+  text-align: center;
+}
+
+.floating-spectrum {
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+}
+
+.floating-spectrum-bar {
+  width: 8px;
+  height: 100%;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.45);
+  transform-origin: 50% 50%;
+  transition: transform 0.08s ease-out, opacity 0.08s ease-out;
+}
+
+.floating-active-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.floating-active-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.floating-active-text {
+  font-size: 20px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.96);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.floating-active-dot-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.72em;
+  height: 0.72em;
+}
+
+.floating-active-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.floating-active-dot-wrap.is-transcribing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: conic-gradient(from 0deg, rgba(255, 255, 255, 0.96) 0deg 324deg, rgba(255, 255, 255, 0) 324deg 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: floating-cursor-spin 1s linear infinite;
+}
+
+@keyframes floating-cursor-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.floating-error-ring {
+  border-color: rgba(255, 99, 99, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 99, 99, 0.55), 0 0 18px rgba(255, 84, 84, 0.7);
+  animation: floating-error-pulse 0.24s ease-in-out 5;
+}
+
+@keyframes floating-error-pulse {
+  0% {
+    border-color: rgba(255, 76, 76, 0.7);
+    box-shadow: 0 0 0 1px rgba(255, 99, 99, 0.45), 0 0 8px rgba(255, 84, 84, 0.3);
+  }
+  50% {
+    border-color: rgba(255, 108, 108, 1);
+    box-shadow: 0 0 0 1px rgba(255, 99, 99, 0.8), 0 0 24px rgba(255, 84, 84, 0.9);
+  }
+  100% {
+    border-color: rgba(255, 76, 76, 0.7);
+    box-shadow: 0 0 0 1px rgba(255, 99, 99, 0.45), 0 0 8px rgba(255, 84, 84, 0.3);
+  }
+}

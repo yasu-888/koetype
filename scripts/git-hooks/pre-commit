@@ -1,0 +1,19 @@
+#!/bin/bash
+YY=$(date +%y)
+M=$(date +%m | sed 's/^0//')
+DD=$(date +%d)
+VERSION="${YY}.${M}.${DD}"
+
+ROOT=$(git rev-parse --show-toplevel)
+
+# tauri.conf.json
+sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$ROOT/src-tauri/tauri.conf.json"
+
+# package.json
+sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$ROOT/package.json"
+
+# Cargo.toml (最初の version = のみ)
+sed -i '' "0,/^version = \"[^\"]*\"/s//version = \"${VERSION}\"/" "$ROOT/src-tauri/Cargo.toml"
+
+# 変更があればステージング
+git add "$ROOT/src-tauri/tauri.conf.json" "$ROOT/package.json" "$ROOT/src-tauri/Cargo.toml"

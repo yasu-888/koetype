@@ -1,0 +1,18 @@
+/** @format */
+
+@import "tailwindcss";
+
+/* セレクトボックスとボタンの陰影を削除してミニマルに */
+select,
+button,
+input[type="text"],
+input[type="password"] {
+  box-shadow: none !important;
+}
+
+/* セレクトボックスのデフォルトスタイルをリセット */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>speech-recognizer</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.koetype.desktop.speech-recognizer</string>
+  <key>CFBundleName</key>
+  <string>KoeType Speech Recognizer</string>
+  <key>CFBundleDisplayName</key>
+  <string>KoeType Speech Recognizer</string>
+  <key>CFBundleIconFile</key>
+  <string>icon.icns</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>録音して文字起こしするためにマイクを使用します。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>音声を文字起こしするために音声認識を使用します。</string>
+</dict>
+</plist>
