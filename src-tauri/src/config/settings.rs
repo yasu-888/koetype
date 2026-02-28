@@ -974,6 +974,7 @@ pub fn get_onboarding_permission_probe_ok() -> Option<bool> {
     platform_settings(&settings).and_then(|p| p.onboarding_permission_probe_ok)
 }
 
+#[cfg(target_os = "macos")]
 pub fn set_onboarding_permission_probe_ok(ok: bool) -> Result<(), ConfigError> {
     let mut settings = load_settings();
     if let Some(platform) = platform_settings_mut(&mut settings) {

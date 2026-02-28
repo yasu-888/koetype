@@ -20,6 +20,15 @@
 
 macOS / Windows に対応した音声入力アプリです。
 Whisper を利用したローカル音声認識と、Gemini API を利用したクラウド音声認識に対応しており、完全無料で使用することも可能です。
+開発ストーリーや機能の説明については、こちらに詳しく書きましたので、ぜひご覧ください。
+
+[完全無料の音声入力アプリリリースしてみた。](https://note.com/yasu_dev/n/n4ae017dbf841)
+
+## サポート
+
+KoeType は個人が趣味で開発・無償公開しているアプリです。気に入っていただけたら、開発継続の励みになりますのでコーヒー一杯分のご支援をいただけると嬉しいです。
+
+<a href="https://www.buymeacoffee.com/koetype" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
 ---
 
@@ -33,6 +42,8 @@ Whisper を利用したローカル音声認識と、Gemini API を利用した�
 2. `KoeType.app` を `Applications` に移動
 3. 起動後、設定画面の「初回セットアップ (macOS)」カードで権限確認を実行
 4. Whisperモデルをダウンロード（初回のみ）
+
+- [note記事](https://note.com/yasu_dev/n/n4ae017dbf841) で画像付きのセットアップ方法紹介。
 
 **Windows:**
 
@@ -134,6 +145,7 @@ pnpm tauri build
   - [対応言語](#対応言語)
   - [バージョン管理](#バージョン管理)
 - [Third-party licenses](#third-party-licenses)
+- [データの取り扱いについて](#データの取り扱いについて)
 - [免責事項・利用条件](#免責事項利用条件)
 
 ---
@@ -658,6 +670,43 @@ CalVer 形式: `YY.M.DD`（例: `26.2.26` → UI 表示 `ver. 2026-02-26`）
 - `OpenAI Whisper`: MIT License
   https://github.com/openai/whisper
 - モデルファイル（GGML）は配布元の利用規約・ライセンスに従って利用してください。
+
+---
+
+## データの取り扱いについて
+
+本アプリで処理される音声・テキストのデータが「KoeType」開発元に送信されることは一切ありません。
+
+### ローカル保存されるデータ
+
+設定情報・利用統計・ユーザー辞書・エラーログ・文字起こし履歴は、すべてユーザーの PC 上にのみ保存されます。サーバー等への送信は行いません。
+
+| OS      | 保存先                    |
+| ------- | ------------------------- |
+| macOS   | `~/.config/koetype/`      |
+| Windows | `%LOCALAPPDATA%\koetype\` |
+
+### 文字起こしモード別の通信内容
+
+| モード              | 外部通信                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Whisper (Local)** | なし。音声処理はすべてローカルで完結します                                                              |
+| **Gemini**          | 音声データ（base64）・文字起こし用プロンプト・ユーザー辞書の単語リストを Gemini API に送信します        |
+| **Hybrid**          | 短い録音はローカル（Whisper）で処理。閾値を超えた録音は Gemini に音声データを送信します                 |
+| **Collaborate**     | 音声はローカル（Whisper）で処理。文字起こし結果テキストとユーザー辞書の単語リストを Gemini に送信します |
+
+**AI 処理モード**（テキスト選択中にショートカットを使用）: 選択テキストと音声指示テキストを Gemini に送信します。
+
+### Gemini API への送信について
+
+Gemini モード使用時のデータ送信先は Google の Gemini API のみです。KoeType 開発元にはデータは一切送信されません。
+データの取り扱いは [Google の Gemini API 利用規約](https://ai.google.dev/gemini-api/terms) に準拠します（無料枠と有料枠でポリシーが異なります）。
+
+### その他の通信
+
+- **フォント読み込み**: アプリ起動時に `fonts.googleapis.com` からフォントデータを取得します
+- **モデルダウンロード**: Whisper モデルの初回インストール時のみ HuggingFace からダウンロードします
+- **アップデート確認**: 設定画面の「更新確認」ボタンを押した場合のみ、GitHub Releases ページをブラウザで開きます（自動チェックは行いません）
 
 ---
 
