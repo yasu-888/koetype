@@ -19,8 +19,10 @@ jobs:
         include:
           - platform: macos-latest
             target: universal-apple-darwin
+            bundle_args: ""
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            bundle_args: --bundles nsis
 
     runs-on: ${{ matrix.platform }}
 
@@ -82,4 +84,4 @@ jobs:
           releaseBody: "See CHANGELOG.md for details"
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} ${{ matrix.bundle_args }}

@@ -437,14 +437,14 @@ pub(crate) fn hide_floating_ui(app: tauri::AppHandle) -> Result<String, String> 
 pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
-    let log_and_err = |message: String| -> Result<String, String> {
+    let log_and_err = |message: String| -> String {
         let full = format!("Whisperインストール起動失敗: {}", message);
         let _ = crate::error_log::ErrorLogManager::add_error(
             crate::error_log::ErrorType::UnknownError,
             &full,
             Some("whisper_install"),
         );
-        Err(full)
+        full
     };
 
     const MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
@@ -491,15 +491,12 @@ pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
 
     {
         let mut file = std::fs::File::create(&script_path)
-            .map_err(|e| format!("インストールスクリプト作成に失敗: {}", e))
-            .or_else(log_and_err)?;
+            .map_err(|e| log_and_err(format!("インストールスクリプト作成に失敗: {}", e)))?;
         file.write_all(script.as_bytes())
-            .map_err(|e| format!("スクリプト書き込みに失敗: {}", e))
-            .or_else(log_and_err)?;
+            .map_err(|e| log_and_err(format!("スクリプト書き込みに失敗: {}", e)))?;
     }
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("スクリプト権限設定に失敗: {}", e))
-        .or_else(log_and_err)?;
+        .map_err(|e| log_and_err(format!("スクリプト権限設定に失敗: {}", e)))?;
 
     let applescript = format!(
         r#"set installScript to quoted form of POSIX path of "{path}"
@@ -513,14 +510,13 @@ end tell"#,
         .arg("-e")
         .arg(applescript)
         .output()
-        .map_err(|e| format!("Terminal 起動に失敗しました: {}", e))
-        .or_else(log_and_err)?;
+        .map_err(|e| log_and_err(format!("Terminal 起動に失敗しました: {}", e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return log_and_err(format!(
+        return Err(log_and_err(format!(
             "Terminal 起動コマンド(osascript)が失敗しました: {}",
             stderr
-        ));
+        )));
     }
 
     Ok(model_path.to_string_lossy().to_string())

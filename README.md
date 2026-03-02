@@ -50,7 +50,7 @@ KoeType は個人が趣味で開発・無償公開しているアプリです。
 
 **Windows:**
 
-1. GitHub Releases から最新の `.exe`（インストーラー）または `.msi` をダウンロード
+1. GitHub Releases から最新の `.exe` インストーラーをダウンロード
 2. インストーラーを実行
 3. アプリを起動
 
@@ -539,7 +539,7 @@ rm -rf dist node_modules/.vite
 
 ## アップデート
 
-配布パッケージ版（macOS: `.dmg` / Windows: `.msi` や `.exe`）は自動アップデートに対応していません。
+配布パッケージ版（macOS: `.dmg` / Windows: `.exe`）は自動アップデートに対応していません。
 更新時は最新の配布パッケージを再ダウンロードし、上書きインストールしてください。
 macOS は `Applications` 内の `KoeType.app` を置き換えてください。
 設定・履歴などのデータは `~/.config/koetype/` に保存されるため、通常はそのまま引き継がれます。
@@ -593,7 +593,7 @@ rm -rf /Applications/KoeType.app
 rm -rf ~/.config/koetype/
 ```
 
-**Windows（配布版 .msi / .exe インストーラー）:**
+**Windows（配布版 .exe インストーラー）:**
 
 1. 「設定 > アプリ」または「プログラムの追加と削除」から **KoeType** をアンインストール
 2. データを削除する場合（任意）
