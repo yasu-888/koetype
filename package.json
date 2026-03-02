@@ -1,7 +1,7 @@
 {
   "name": "koetype",
   "private": true,
-  "version": "26.2.28",
+  "version": "26.3.02",
   "license": "MIT",
   "type": "module",
   "scripts": {

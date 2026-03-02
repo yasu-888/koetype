@@ -10,6 +10,7 @@ import {
   TestTubeIcon,
 } from "@phosphor-icons/react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { OnboardingStatus, PasteRuntimeDiag, PasteSelfTestResult, PermissionProbeResult } from "../types";
 import { getErrorMessage } from "../utils/error";
 import { buttonClass } from "../utils/styles";
@@ -111,7 +112,22 @@ export function TroubleshootingSection() {
         setWhisperMessageSuccess(true);
         setWhisperMessage(`インストール済み: ${modelName} (100%)`);
       } else {
-        setWhisperMessage("Whisperモデルが見つかりません");
+        const cliMissing = !next.whisper_cli_path;
+        const modelMissing = !next.whisper_model_path;
+        const detectedModel = next.whisper_model_path?.split(/[/\\]/).pop();
+        if (cliMissing && modelMissing) {
+          setWhisperMessage("Whisper CLI とモデルが見つかりません");
+        } else if (cliMissing) {
+          setWhisperMessage(
+            detectedModel
+              ? `Whisper CLI が見つかりません（検出モデル: ${detectedModel}）`
+              : "Whisper CLI が見つかりません",
+          );
+        } else if (modelMissing) {
+          setWhisperMessage("Whisperモデルが見つかりません");
+        } else {
+          setWhisperMessage("Whisperの状態確認に失敗しました");
+        }
       }
     } catch (error: unknown) {
       setWhisperMessage(getErrorMessage(error));
@@ -131,10 +147,22 @@ export function TroubleshootingSection() {
       setWhisperMessageSuccess(true);
       setWhisperMessage("ターミナルを開きました。進捗はターミナル画面で確認してください。");
     } catch (error: unknown) {
+      const message = `Whisperインストール失敗: ${getErrorMessage(error)}`;
+      await invoke("log_frontend_event", { message }).catch(() => null);
       setWhisperMessageSuccess(false);
       setWhisperMessage(getErrorMessage(error));
     } finally {
       setIsInstallingWhisper(false);
+    }
+  };
+
+  const openWhisperManualSetup = async () => {
+    try {
+      await openUrl(
+        "https://github.com/yasu-888/koetype?tab=readme-ov-file#Whisper%E3%81%AE%E3%82%BB%E3%83%83%E3%83%88%E3%82%A2%E3%83%83%E3%83%97",
+      );
+    } catch (error: unknown) {
+      alert(`手動設定ガイドを開けませんでした: ${getErrorMessage(error)}`);
     }
   };
 
@@ -208,6 +236,9 @@ export function TroubleshootingSection() {
           ) : null}
           <button onClick={checkWhisperStatus} disabled={isCheckingWhisper} className={buttonClass}>
             {isCheckingWhisper ? <Icons.Spinner /> : "状態を確認"}
+          </button>
+          <button onClick={openWhisperManualSetup} className={buttonClass}>
+            手動で設定
           </button>
           <button onClick={installWhisper} disabled={isInstallingWhisper} className={buttonClass}>
             {isInstallingWhisper ? <Icons.Spinner /> : "インストール"}

@@ -17,6 +17,9 @@
 .PARAMETER Backend
     GPU バックエンド: cpu / cuda11 / cuda12。省略時は対話選択。
 
+.PARAMETER NonInteractive
+    対話入力を行わずに実行します。Model / Variant / Backend を必ず指定してください。
+
 .EXAMPLE
     .\scripts\windows\setup-whisper.ps1
     .\scripts\windows\setup-whisper.ps1 -Model large-v3-turbo -Variant q5_0 -Backend cpu
@@ -26,7 +29,8 @@ param(
     [string]$Model = "",
     [string]$Variant = "",
     [string]$Backend = "",
-    [switch]$MigrateOnly
+    [switch]$MigrateOnly,
+    [switch]$NonInteractive
 )
 
 Set-StrictMode -Version Latest
@@ -77,6 +81,66 @@ $modelsDir = if ($env:WHISPER_MODELS_DIR) {
     $env:KOETYPE_WHISPER_MODELS_DIR
 } else {
     Join-Path $appHome "models\whisper"
+}
+
+function Write-KoeTypeErrorLog {
+    param([string]$Message)
+
+    try {
+        $logPath = Join-Path (Get-AppHomeDir) "error_log.json"
+        $entries = @()
+        if (Test-Path $logPath) {
+            $raw = Get-Content -LiteralPath $logPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($parsed -is [System.Array]) {
+                    $entries = @($parsed)
+                } else {
+                    $entries = @($parsed)
+                }
+            }
+        }
+
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $entry = [pscustomobject]@{
+            id         = [int64]$now
+            timestamp  = [int64]$now
+            error_type = "UnknownError"
+            message    = $Message
+            context    = "whisper_install_ps1"
+        }
+
+        $updated = @($entry) + $entries
+        if ($updated.Count -gt 500) {
+            $updated = $updated[0..499]
+        }
+
+        $logDir = Split-Path -Parent $logPath
+        if (-not [string]::IsNullOrWhiteSpace($logDir)) {
+            New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+        }
+
+        $updated | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $logPath -Encoding UTF8
+    } catch {
+        Write-Warning "error_log.json への書き込みに失敗しました: $($_.Exception.Message)"
+    }
+}
+
+trap {
+    $base = $_.Exception.Message
+    $position = $_.InvocationInfo.PositionMessage
+    $fullMessage = if ([string]::IsNullOrWhiteSpace($position)) {
+        "Whisperインストール実行失敗: $base"
+    } else {
+        "Whisperインストール実行失敗: $base`n$position"
+    }
+
+    Write-Host ""
+    Write-Error $fullMessage
+    Write-KoeTypeErrorLog -Message $fullMessage
+    Write-Host ""
+    Read-Host "Enterキーで閉じる" | Out-Null
+    exit 1
 }
 
 function Get-LegacyAppHomes {
@@ -213,6 +277,9 @@ if (Test-Path $cliDest) {
     if ($missingDlls.Count -gt 0) {
         Write-Warning "ランタイム DLL が不足しています: $($missingDlls -join ', ')"
         Write-Host "不足ファイルを解消するため、バイナリを再ダウンロードします。"
+    } elseif ($NonInteractive) {
+        Write-Host "非対話モードのため、既存バイナリを再利用します。"
+        $skipBinary = $true
     } else {
         $skip = Read-Host "再ダウンロードしますか？ [y/N]"
         if ($skip -notmatch '^[yY]') {
@@ -225,6 +292,10 @@ if (Test-Path $cliDest) {
 if (-not $skipBinary) {
     # Backend 選択
     if (-not $Backend) {
+        if ($NonInteractive) {
+            Write-Error "非対話モードでは -Backend を指定してください。"
+            exit 2
+        }
         Write-Host "GPU バックエンドを選択してください:"
         $backendKeys = @($BACKENDS.Keys)
         for ($i = 0; $i -lt $backendKeys.Count; $i++) {
@@ -303,6 +374,10 @@ Write-Host ""
 
 # モデル選択
 if (-not $Model) {
+    if ($NonInteractive) {
+        Write-Error "非対話モードでは -Model を指定してください。"
+        exit 2
+    }
     Write-Host "ダウンロードするモデルを選択してください:"
     $Model = Select-FromList -Prompt "Model" -Items $MODELS
 }
@@ -315,6 +390,10 @@ if ($MODELS -notcontains $Model) {
 # バリアント選択
 $validVariants = Get-Variants -ModelName $Model
 if (-not $Variant) {
+    if ($NonInteractive) {
+        Write-Error "非対話モードでは -Variant を指定してください。"
+        exit 2
+    }
     if ($validVariants.Count -eq 1) {
         $Variant = $validVariants[0]
         Write-Host "$Model のバリアントは 1 種類のみです: $Variant"
@@ -365,6 +444,3 @@ Write-Host "  $appHome\config.toml"
 Write-Host ""
 Write-Host "  [win]"
 Write-Host "  whisper_cli_path = `"$cliDest`""
-
-
-

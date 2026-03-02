@@ -588,7 +588,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                                 crate::transcription::transcribe_audio_local(
                                     &path_str,
                                     lang.as_str(),
-                                    "large-v3",
+                                    "auto",
                                 )
                                 .await
                             } else {
@@ -616,7 +616,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                         crate::transcription::transcribe_audio_local(
                             &path_str,
                             lang.as_str(),
-                            "large-v3",
+                            "auto",
                         )
                         .await
                     }
@@ -626,7 +626,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                         match crate::transcription::transcribe_audio_local(
                             &path_str,
                             lang.as_str(),
-                            "large-v3",
+                            "auto",
                         )
                         .await
                         {

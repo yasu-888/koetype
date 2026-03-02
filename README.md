@@ -34,23 +34,25 @@ KoeType は個人が趣味で開発・無償公開しているアプリです。
 
 ## クイックスタート
 
+初回起動後は [初回設定](#初回設定) を行ってください。Whisper を使う場合は [Whisperのセットアップ](#whisper-setup) を続けて実施します（アプリのボタンから設定、またはコマンドで設定）。
+
+画像つき導入ガイド:
+
+- [note記事（完全無料の音声入力アプリリリースしてみた。）](https://note.com/yasu_dev/n/n6864e3084183)
+
 ### 配布パッケージでインストール
 
 **macOS:**
 
 1. GitHub Releases から最新の `.dmg` をダウンロード
 2. `KoeType.app` を `Applications` に移動
-3. 起動後、設定画面の「初回セットアップ (macOS)」カードで権限確認を実行
-4. Whisperモデルをダウンロード（初回のみ）
-
-- [note記事](https://note.com/yasu_dev/n/n6864e3084183) で画像付きのセットアップ方法紹介。
+3. アプリを起動
 
 **Windows:**
 
 1. GitHub Releases から最新の `.exe`（インストーラー）または `.msi` をダウンロード
 2. インストーラーを実行
-3. 起動後、ショートカットキーとマイクを設定
-4. Whisperモデルをダウンロード（初回のみ）
+3. アプリを起動
 
 ### pnpm でローカルビルド（開発者向け）
 
@@ -64,12 +66,6 @@ pnpm macos:prepare-whisper-bundle
 pnpm macos:rebuild-install
 ```
 
-インストール後、システム設定で以下の権限を許可してください（自動でダイアログが開きます）。
-
-- アクセシビリティ（グローバルショートカット・ペースト注入）
-- マイク（音声録音）
-- 音声認識（OS 標準ディクテーション連携）
-
 **Windows:**
 
 **前提**: `pnpm`、Rust / Cargo が使える状態で、リポジトリを clone 済み。
@@ -80,46 +76,19 @@ pnpm tauri build
 .\scripts\windows\install.ps1 -RegisterStartup -StartNow
 ```
 
-### アップデート
-
-配布パッケージ版（macOS: `.dmg` / Windows: `.msi` や `.exe`）は自動アップデートに対応していません。  
-更新時は最新の配布パッケージを再ダウンロードし、上書きインストールしてください。  
-macOS は `Applications` 内の `KoeType.app` を置き換えてください。  
-設定・履歴などのデータは `~/.config/koetype/`（Windows は `%LOCALAPPDATA%\koetype\`）に保存されるため、通常はそのまま引き継がれます。
-
-**macOS:**
-
-```bash
-git pull
-pnpm install
-pnpm macos:rebuild-install
-```
-
-**Windows:**
-
-```powershell
-git pull
-pnpm install
-pnpm tauri build
-.\scripts\windows\install.ps1
-```
-
 ---
 
 ## 目次
 
 - [基本的な使い方](#基本的な使い方)
   - [初回設定](#初回設定)
+  - [Whisperのセットアップ](#whisper-setup)
+    - [1. アプリのボタンから設定（推奨）](#whisper-setup-by-app)
+    - [2. コマンドで設定](#whisper-setup-by-command)
   - [音声入力の流れ](#音声入力の流れ)
   - [ショートカットキー](#ショートカットキー)
 - [機能詳細](#機能詳細)
   - [文字起こしモード](#文字起こしモード)
-  - [ローカルWhisper](#ローカルwhisper)
-    - [whisper-cli の導入](#whisper-cli-の導入)
-    - [モデルのダウンロードと配置](#モデルのダウンロードと配置)
-    - [配置確認](#配置確認)
-    - [config.toml での詳細設定（任意）](#configtoml-での詳細設定任意)
-    - [Whisper 実行確認・診断](#whisper-実行確認診断)
   - [入力方式](#入力方式)
   - [フローティングUI](#フローティングui)
   - [AI処理モード](#ai処理モード)
@@ -139,6 +108,8 @@ pnpm tauri build
   - [ペーストが動かない](#ペーストが動かない)
   - [Whisperが動かない](#whisperが動かない)
   - [ログの確認方法](#ログの確認方法)
+- [アップデート](#アップデート)
+- [アンインストール](#アンインストール)
 - [仕様](#仕様)
   - [対応OS・動作環境](#対応os動作環境)
   - [プラットフォーム差分](#プラットフォーム差分)
@@ -157,8 +128,82 @@ pnpm tauri build
 1. トレイアイコンをクリック → **設定** を開く
 2. **文字起こしモード** を選択（`Gemini` または `Whisper (Local)` 推奨）
 3. Gemini を選んだ場合: API キーとモデルを設定
-4. Whisper を選んだ場合: モデルをセットアップ（[ローカルWhisper](#ローカルwhisper) 参照）
+4. Whisper を選んだ場合: モデルをセットアップ（[Whisperのセットアップ](#whisper-setup) 参照）
 5. マイクを選択（Options タブ > Microphone）
+
+<a id="whisper-setup"></a>
+
+### Whisperのセットアップ
+
+API キー不要でオフライン動作します。設定方法は次の2つです。
+
+<a id="whisper-setup-by-app"></a>
+
+#### 1. アプリのボタンから設定（推奨）
+
+1. 設定画面を開く
+2. **トラブルシューティング > 状態を確認**
+3. 不足している場合のみ **インストール**
+4. 完了後にもう一度 **状態を確認**
+
+失敗時:
+
+- **トラブルシューティング > 手動で設定** から、次の「2. コマンドで設定」を開いて実行してください。
+- エラーは `error_log.json` に出力され、アプリのエラーログ画面でも確認できます。
+
+<a id="whisper-setup-by-command"></a>
+
+#### 2. コマンドで設定
+
+`scripts/windows/setup-whisper.ps1` のようなアプリ内スクリプトではなく、`whisper.cpp` / HuggingFace の配布元URLを直接使って導入する方法です。
+
+**macOS:**
+
+```bash
+brew install whisper-cpp
+mkdir -p ~/.config/koetype/models/whisper
+curl -L \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_1.bin" \
+  -o ~/.config/koetype/models/whisper/ggml-large-v3-turbo-q5_1.bin
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$appHome = "$HOME\.config\koetype"
+$binDir = "$appHome\bin"
+$modelsDir = "$appHome\models\whisper"
+New-Item -ItemType Directory -Force -Path $binDir, $modelsDir | Out-Null
+
+$zipUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.3/whisper-bin-x64.zip"
+$zipPath = "$env:TEMP\whisper-bin-x64.zip"
+$extractDir = "$env:TEMP\whisper-bin-x64"
+
+Invoke-WebRequest $zipUrl -OutFile $zipPath
+if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+Copy-Item "$extractDir\Release\whisper-cli.exe" "$binDir\whisper-cli.exe" -Force
+Copy-Item "$extractDir\Release\*.dll" $binDir -Force
+
+Invoke-WebRequest `
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin" `
+  -OutFile "$modelsDir\ggml-base-q5_1.bin"
+```
+
+確認コマンド:
+
+```bash
+whisper-cli --help
+ls ~/.config/koetype/models/whisper/
+```
+
+```powershell
+& "$HOME\.config\koetype\bin\whisper-cli.exe" --help
+Get-ChildItem "$HOME\.config\koetype\models\whisper\ggml-*.bin"
+```
+
+モデルは既定名以外でも `ggml-*.bin` なら自動検出されます。既定以外を固定したい場合だけ `config.toml` の `whisper_model_path` を指定してください。
 
 ### 音声入力の流れ
 
@@ -200,150 +245,6 @@ pnpm tauri build
 - `gemini-2.5-flash-lite`（高速・低コスト）
 - `gemini-2.5-flash`（バランス）
 - `gemini-3-flash-preview`
-
-### ローカルWhisper
-
-API キー不要でオフライン動作します。
-
-- macOS 配布版（DMG）: Whisper CLI + `large-v3-turbo-q5_0` を同梱しているため、追加セットアップなしで利用開始できます。
-- 開発環境ビルド: 従来どおり初回セットアップが必要です。
-
-既定の保存先:
-
-- モデル: `~/.config/koetype/models/whisper/`
-- 文字起こし蓄積: `~/.config/koetype/transcripts.jsonl`
-- ログ: `~/.config/koetype/logs/whisper-cli.log`
-
-#### whisper-cli の導入
-
-**macOS（Homebrew・推奨）:**
-
-```bash
-brew install whisper-cpp
-which whisper-cli
-whisper-cli --help
-```
-
-**Windows（推奨）:**
-
-```powershell
-.\scripts\windows\setup-whisper.ps1
-```
-
-`setup-whisper.ps1` は GPU バックエンドとモデルを対話的に選択し、以下に配置します。
-
-- `%LOCALAPPDATA%\koetype\bin\whisper-cli.exe`
-- `%LOCALAPPDATA%\koetype\models\whisper\<model>.bin`
-
-#### モデルのダウンロードと配置
-
-**macOS / Linux（large-v3-turbo 推奨）:**
-
-```bash
-mkdir -p ~/.config/koetype/models/whisper
-curl -L \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" \
-  -o ~/.config/koetype/models/whisper/ggml-large-v3-turbo-q5_0.bin
-```
-
-**macOS / Linux（large-v3 高精度）:**
-
-```bash
-mkdir -p ~/.config/koetype/models/whisper
-curl -L \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin" \
-  -o ~/.config/koetype/models/whisper/ggml-large-v3-q5_0.bin
-```
-
-**Windows（手動配置する場合）:**
-
-```powershell
-$modelsDir = "$env:LOCALAPPDATA\koetype\models\whisper"
-New-Item -ItemType Directory -Force -Path $modelsDir
-Invoke-WebRequest `
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" `
-  -OutFile "$modelsDir\ggml-large-v3-turbo-q5_0.bin"
-```
-
-#### 配置確認
-
-```bash
-# macOS / Linux
-ls -lh ~/.config/koetype/models/whisper/
-# ggml-large-v3-turbo-q5_0.bin  約 547MB
-# ggml-large-v3-q5_0.bin        約 1.1GB
-```
-
-```powershell
-# Windows
-Get-ChildItem "$env:LOCALAPPDATA\koetype\models\whisper\"
-```
-
-推奨モデル:
-
-| 環境                     | 推奨モデル                | ファイルサイズ |
-| ------------------------ | ------------------------- | -------------- |
-| Apple Silicon            | `large-v3-turbo` + `q5_0` | ~547MB         |
-| CPU 中心（軽量ノート等） | `base` + `q5_0`           | 小             |
-
-#### config.toml での詳細設定（任意）
-
-**macOS:**
-
-```toml
-# 省略時は KOETYPE_HOME/bin -> Homebrew標準パス -> PATH の順に探索
-whisper_cli_path = "/Users/you/.config/koetype/bin/whisper-cli"
-
-# モデルを直接指定したい場合に使用
-# whisper_model_path = "/Users/you/.config/koetype/models/whisper/ggml-large-v3-turbo-q5_0.bin"
-
-# 言語固定（auto / ja / en）
-# whisper_language = "auto"
-```
-
-**Windows（`%LOCALAPPDATA%\koetype\config.toml`）:**
-
-```toml
-[win]
-# whisper_cli_path = 'C:\path\to\whisper-cli.exe'
-# whisper_model_path = 'C:\path\to\ggml-large-v3-turbo-q5_0.bin'
-# whisper_language = "auto"
-```
-
-#### Whisper 実行確認・診断
-
-手動で文字起こしを試す場合:
-
-```bash
-./scripts/manage.sh setup:whisper
-./scripts/manage.sh transcribe <audio-file> [ja|en|auto]
-```
-
-または配布用同梱アセットを用意する場合:
-
-```bash
-pnpm macos:prepare-whisper-bundle
-```
-
-**Windows:**
-
-```powershell
-Test-Path "$env:LOCALAPPDATA\koetype\bin\whisper-cli.exe"
-```
-
-環境変数で上書きする場合:
-
-| 環境変数                      | 用途                             |
-| ----------------------------- | -------------------------------- |
-| `KOETYPE_HOME`                | データディレクトリ全体の切り替え |
-| `KOETYPE_WHISPER_MODEL_PATH`  | アプリ本体が使うモデルを直指定   |
-| `KOETYPE_WHISPER_CLI_PATH`    | whisper-cli のパスを指定         |
-| `KOETYPE_WHISPER_OUTPUT_DIR`  | 出力ディレクトリの変更           |
-| `KOETYPE_WHISPER_OUTPUT_BASE` | 1回実行時の出力ベース名を固定    |
-| `KOETYPE_LOG_DIR`             | ログディレクトリの変更           |
-| `KOETYPE_TRANSCRIPTS_PATH`    | 文字起こし蓄積先の変更           |
-
-設定画面で文字起こしモードを `Whisper (Local)` に切り替えると以後ローカル実行されます。
 
 ### 入力方式
 
@@ -461,7 +362,7 @@ AI 処理に使うモデルは、文字起こしモデルとは別に設定画�
 
 ### config.toml 概要
 
-アプリ設定は `~/.config/koetype/config.toml`（Windows: `%LOCALAPPDATA%\koetype\config.toml`）で管理します。
+アプリ設定は `~/.config/koetype/config.toml` で管理します。
 
 1 ファイルで OS 別設定を管理できます。
 
@@ -471,7 +372,7 @@ language = "ja"
 
 # Whisper runtime options (optional)
 whisper_cli_path = "/Users/you/.config/koetype/bin/whisper-cli"
-whisper_model_path = "/Users/you/.config/koetype/models/whisper/ggml-large-v3-turbo-q5_0.bin"
+whisper_model_path = "/Users/you/.config/koetype/models/whisper/ggml-base-q5_1.bin"
 whisper_output_dir = "/Users/you/.config/koetype/outputs/transcriptions"
 whisper_log_dir = "/Users/you/.config/koetype/logs"
 whisper_language = "auto" # auto / ja / en
@@ -592,7 +493,7 @@ rm -rf dist node_modules/.vite
    which whisper-cli
 
    # Windows (PowerShell)
-   Test-Path "$env:LOCALAPPDATA\koetype\bin\whisper-cli.exe"
+   Test-Path "$HOME\.config\koetype\bin\whisper-cli.exe"
    ```
 
 2. モデルファイルが正しい場所に配置されているか確認
@@ -600,12 +501,14 @@ rm -rf dist node_modules/.vite
    ```bash
    # macOS
    ls ~/.config/koetype/models/whisper/
-   # ggml-large-v3-turbo-q5_0.bin  約 547MB
+   # ggml-base-q5_1.bin         約 57MB
+   # ggml-large-v3-turbo-q5_1.bin  約 547MB
    ```
 
 3. モデルのファイル名が設定と一致しているか確認
-   - `Whisper large-v3-turbo (Local)`: `ggml-large-v3-turbo-q5_0.bin`
-   - `Whisper large-v3 (Local・高精度)`: `ggml-large-v3-q5_0.bin`
+   - `Whisper base (Local・軽量)`: `ggml-base-q5_1.bin`
+   - `Whisper large-v3-turbo (Local)`: `ggml-large-v3-turbo-q5_1.bin`
+   - `Whisper large-v3 (Local・高精度)`: `ggml-large-v3-q5_1.bin`
 
 4. パスを明示指定して再試行
 
@@ -634,6 +537,90 @@ rm -rf dist node_modules/.vite
 
 ---
 
+## アップデート
+
+配布パッケージ版（macOS: `.dmg` / Windows: `.msi` や `.exe`）は自動アップデートに対応していません。
+更新時は最新の配布パッケージを再ダウンロードし、上書きインストールしてください。
+macOS は `Applications` 内の `KoeType.app` を置き換えてください。
+設定・履歴などのデータは `~/.config/koetype/` に保存されるため、通常はそのまま引き継がれます。
+
+**macOS:**
+
+```bash
+git pull
+pnpm install
+pnpm macos:rebuild-install
+```
+
+**Windows:**
+
+```powershell
+git pull
+pnpm install
+pnpm tauri build
+.\scripts\windows\install.ps1
+```
+
+---
+
+## アンインストール
+
+**macOS（配布版 .dmg）:**
+
+1. アプリを終了（トレイメニュー > KoeType を終了）
+2. LaunchAgent を停止・削除
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.koetype.desktop.plist 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/com.koetype.desktop.plist
+```
+
+3. `/Applications/KoeType.app` をゴミ箱へ移動
+4. データを削除する場合（任意）
+
+```bash
+rm -rf ~/.config/koetype/
+```
+
+**macOS（開発版 / `macos:rebuild-install` 経由）:**
+
+```bash
+pkill -f koetype || true
+launchctl unload ~/Library/LaunchAgents/com.koetype.desktop.plist 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/com.koetype.desktop.plist
+rm -rf /Applications/KoeType.app
+# データも削除する場合
+rm -rf ~/.config/koetype/
+```
+
+**Windows（配布版 .msi / .exe インストーラー）:**
+
+1. 「設定 > アプリ」または「プログラムの追加と削除」から **KoeType** をアンインストール
+2. データを削除する場合（任意）
+
+```powershell
+Remove-Item -Recurse -Force "$HOME\.config\koetype"
+```
+
+**Windows（開発版 / `install.ps1` 経由）:**
+
+```powershell
+# アプリを停止
+Stop-Process -Name KoeType -Force -ErrorAction SilentlyContinue
+
+# スタートアップショートカットを削除
+$lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'KoeType.lnk'
+Remove-Item -Force $lnk -ErrorAction SilentlyContinue
+
+# アプリ本体を削除
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\KoeType"
+
+# データも削除する場合
+Remove-Item -Recurse -Force "$HOME\.config\koetype"
+```
+
+---
+
 ## 仕様
 
 ### 対応OS・推奨環境
@@ -649,7 +636,7 @@ rm -rf dist node_modules/.vite
 | ------------------ | --------------------------- | ------------------------------ |
 | フローティング既定 | SwiftUI オーバーレイ        | Tauri + オーディオスペクトラム |
 | 音声フィードバック | OS 標準ディクテーション連携 | スペクトラム表示               |
-| 設定ファイル場所   | `~/.config/koetype/`        | `%LOCALAPPDATA%\koetype\`      |
+| 設定ファイル場所   | `~/.config/koetype/`        | `~/.config/koetype/`           |
 | 自動起動           | LaunchAgent                 | スタートアップフォルダ         |
 
 ### 対応言語
@@ -681,10 +668,10 @@ CalVer 形式: `YY.M.DD`（例: `26.2.26` → UI 表示 `ver. 2026-02-26`）
 
 設定情報・利用統計・ユーザー辞書・エラーログ・文字起こし履歴は、すべてユーザーの PC 上にのみ保存されます。サーバー等への送信は行いません。
 
-| OS      | 保存先                    |
-| ------- | ------------------------- |
-| macOS   | `~/.config/koetype/`      |
-| Windows | `%LOCALAPPDATA%\koetype\` |
+| OS      | 保存先               |
+| ------- | -------------------- |
+| macOS   | `~/.config/koetype/` |
+| Windows | `~/.config/koetype/` |
 
 ### 文字起こしモード別の通信内容
 

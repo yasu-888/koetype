@@ -67,7 +67,7 @@ fn should_prompt_whisper_runtime_setup() -> bool {
     if !whisper_provider {
         return false;
     }
-    let status = crate::transcription::whisper_local::inspect_whisper_runtime_status("large-v3-turbo");
+    let status = crate::transcription::whisper_local::inspect_whisper_runtime_status_auto();
     status.cli_path.is_none() || status.model_path.is_none()
 }
 

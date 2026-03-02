@@ -45,8 +45,7 @@ pub(crate) struct PermissionProbePayload {
 }
 
 fn get_onboarding_status_payload() -> OnboardingStatusPayload {
-    let whisper =
-        crate::transcription::whisper_local::inspect_whisper_runtime_status("large-v3-turbo");
+    let whisper = crate::transcription::whisper_local::inspect_whisper_runtime_status_auto();
     #[cfg(target_os = "macos")]
     let ax_trusted = crate::clipboard::injector::is_macos_accessibility_trusted();
     #[cfg(not(target_os = "macos"))]
@@ -339,8 +338,9 @@ pub(crate) async fn install_whisper_model(app: AppHandle) -> Result<String, Stri
             |progress: crate::transcription::whisper_local::WhisperInstallProgress| {
                 let _ = tx.send(progress);
             };
+        let default_model = crate::transcription::whisper_local::default_model_name_for_platform();
         crate::transcription::whisper_local::install_whisper_model_with_progress(
-            "large-v3-turbo",
+            default_model,
             &mut emit_progress,
         )
     });
@@ -349,12 +349,18 @@ pub(crate) async fn install_whisper_model(app: AppHandle) -> Result<String, Stri
         let _ = app.emit("whisper-install-progress", progress);
     }
 
-    match task.await.map_err(|e| format!("インストール処理に失敗: {}", e))? {
+    match task
+        .await
+        .map_err(|e| format!("インストール処理に失敗: {}", e))?
+    {
         Ok(model_path) => {
             crate::config::settings::set_whisper_model_path(Some(model_path.clone()))
                 .map_err(|e| e.to_string())?;
             if let Err(e) = hide_floating_ui(app.clone()) {
-                warn!("Whisperインストール完了後のフローティング非表示に失敗: {}", e);
+                warn!(
+                    "Whisperインストール完了後のフローティング非表示に失敗: {}",
+                    e
+                );
             }
             Ok(format!("Whisperモデルを配置しました: {}", model_path))
         }
@@ -394,8 +400,7 @@ pub(crate) fn set_stt_provider(app: AppHandle, provider: String) -> Result<Strin
         _ => return Err(format!("未対応の文字起こしプロバイダです: {}", provider)),
     };
 
-    crate::config::set_stt_provider(parsed.clone())
-        .map_err(|e| e.to_string())?;
+    crate::config::set_stt_provider(parsed.clone()).map_err(|e| e.to_string())?;
 
     if parsed == SttProvider::Gemini {
         if let Err(e) = hide_floating_ui(app) {
@@ -403,7 +408,10 @@ pub(crate) fn set_stt_provider(app: AppHandle, provider: String) -> Result<Strin
         }
     }
 
-    Ok(format!("文字起こしプロバイダを {} に設定しました", provider))
+    Ok(format!(
+        "文字起こしプロバイダを {} に設定しました",
+        provider
+    ))
 }
 
 #[tauri::command]
@@ -429,6 +437,15 @@ pub(crate) fn hide_floating_ui(app: tauri::AppHandle) -> Result<String, String> 
 pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    let log_and_err = |message: String| -> Result<String, String> {
+        let full = format!("Whisperインストール起動失敗: {}", message);
+        let _ = crate::error_log::ErrorLogManager::add_error(
+            crate::error_log::ErrorType::UnknownError,
+            &full,
+            Some("whisper_install"),
+        );
+        Err(full)
+    };
 
     const MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
     const MODEL_URL: &str =
@@ -474,12 +491,15 @@ pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
 
     {
         let mut file = std::fs::File::create(&script_path)
-            .map_err(|e| format!("インストールスクリプト作成に失敗: {}", e))?;
+            .map_err(|e| format!("インストールスクリプト作成に失敗: {}", e))
+            .or_else(log_and_err)?;
         file.write_all(script.as_bytes())
-            .map_err(|e| format!("スクリプト書き込みに失敗: {}", e))?;
+            .map_err(|e| format!("スクリプト書き込みに失敗: {}", e))
+            .or_else(log_and_err)?;
     }
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("スクリプト権限設定に失敗: {}", e))?;
+        .map_err(|e| format!("スクリプト権限設定に失敗: {}", e))
+        .or_else(log_and_err)?;
 
     let applescript = format!(
         r#"set installScript to quoted form of POSIX path of "{path}"
@@ -493,10 +513,11 @@ end tell"#,
         .arg("-e")
         .arg(applescript)
         .output()
-        .map_err(|e| format!("Terminal 起動に失敗しました: {}", e))?;
+        .map_err(|e| format!("Terminal 起動に失敗しました: {}", e))
+        .or_else(log_and_err)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!(
+        return log_and_err(format!(
             "Terminal 起動コマンド(osascript)が失敗しました: {}",
             stderr
         ));
@@ -508,48 +529,72 @@ end tell"#,
 #[tauri::command]
 #[cfg(target_os = "windows")]
 pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
-    const MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
-    const MODEL_URL: &str =
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let log_err = |message: String| -> String {
+        let full = format!("Whisperインストール起動失敗: {}", message);
+        let _ = crate::error_log::ErrorLogManager::add_error(
+            crate::error_log::ErrorType::UnknownError,
+            &full,
+            Some("whisper_install"),
+        );
+        full
+    };
+
+    const MODEL_NAME: &str = "base";
+    const MODEL_VARIANT: &str = "q5_1";
+    const MODEL_FILENAME: &str = "ggml-base-q5_1.bin";
+    const BACKEND: &str = "cpu";
 
     let app_home = crate::config::settings::get_app_home_dir();
     let model_dir = app_home.join("models").join("whisper");
     let model_path = model_dir.join(MODEL_FILENAME);
-    let tmp_path = model_dir.join(format!("{}.tmp", MODEL_FILENAME));
+    let configured_model_path = model_path.to_string_lossy().to_string();
 
-    let script_path = std::env::temp_dir().join("koetype_install_whisper.ps1");
-    let script = format!(
-        "$ErrorActionPreference = 'Stop'\r\nWrite-Host 'Whisper モデルをダウンロードします...'\r\nWrite-Host '保存先: {model_path}'\r\nWrite-Host ''\r\nNew-Item -ItemType Directory -Force -Path '{model_dir}' | Out-Null\r\ncurl.exe -L -# '{model_url}' -o '{tmp_path}'\r\nMove-Item -Path '{tmp_path}' -Destination '{model_path}' -Force\r\nWrite-Host ''\r\nWrite-Host 'インストール完了: {model_path}'\r\nWrite-Host 'KoeType の設定画面で状態を確認してください。'\r\nRead-Host -Prompt 'Enterキーで閉じる'\r\n",
-        model_dir = model_dir.to_string_lossy(),
-        model_path = model_path.to_string_lossy(),
-        model_url = MODEL_URL,
-        tmp_path = tmp_path.to_string_lossy(),
-    );
-
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let script_path = std::env::temp_dir().join(format!("koetype_setup_whisper_{}.ps1", ts));
+    let script = include_str!("../../../scripts/windows/setup-whisper.ps1");
     std::fs::write(&script_path, script.as_bytes())
-        .map_err(|e| format!("インストールスクリプト作成に失敗: {}", e))?;
+        .map_err(|e| log_err(format!("インストールスクリプト作成に失敗: {}", e)))?;
 
     Command::new("cmd.exe")
         .args([
             "/c",
             "start",
+            "KoeType Whisper Setup",
             "powershell.exe",
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
             &script_path.to_string_lossy().to_string(),
+            "-Model",
+            MODEL_NAME,
+            "-Variant",
+            MODEL_VARIANT,
+            "-Backend",
+            BACKEND,
+            "-NonInteractive",
         ])
         .spawn()
-        .map_err(|e| format!("PowerShell を開けませんでした: {}", e))?;
+        .map_err(|e| log_err(format!("PowerShell を開けませんでした: {}", e)))?;
 
-    Ok(model_path.to_string_lossy().to_string())
+    Ok(configured_model_path)
 }
 
 #[tauri::command]
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn open_terminal_install_whisper() -> Result<String, String> {
-    Err("このコマンドはmacOS/Windows専用です".to_string())
+    let message = "このコマンドはmacOS/Windows専用です".to_string();
+    let full = format!("Whisperインストール起動失敗: {}", message);
+    let _ = crate::error_log::ErrorLogManager::add_error(
+        crate::error_log::ErrorType::UnknownError,
+        &full,
+        Some("whisper_install"),
+    );
+    Err(full)
 }
 
 #[tauri::command]
@@ -600,10 +645,7 @@ fn open_settings_tab(app: tauri::AppHandle, tab: &str) -> Result<(), String> {
     }
 }
 
-pub(crate) fn open_settings_tab_internal(
-    app: tauri::AppHandle,
-    tab: &str,
-) -> Result<(), String> {
+pub(crate) fn open_settings_tab_internal(app: tauri::AppHandle, tab: &str) -> Result<(), String> {
     open_settings_tab(app, tab)
 }
 
@@ -690,8 +732,7 @@ fn run_macos_permission_probe(app: &AppHandle) -> Result<PermissionProbePayload,
         Ok(status) => {
             let success = status.success();
             let detail = if success {
-                "KoeType Speech Recognizer のマイク/音声認識の権限確認に成功しました"
-                    .to_string()
+                "KoeType Speech Recognizer のマイク/音声認識の権限確認に成功しました".to_string()
             } else {
                 format!("open 終了コード: {:?}", status.code())
             };

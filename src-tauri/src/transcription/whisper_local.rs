@@ -174,11 +174,61 @@ fn koetype_home_dir() -> Result<PathBuf, String> {
     Ok(crate::config::settings::get_app_home_dir())
 }
 
+pub fn default_model_name_for_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "base"
+    } else {
+        "large-v3-turbo"
+    }
+}
+
+fn preferred_model_names_for_platform() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["base", "large-v3-turbo", "large-v3"]
+    } else {
+        &["large-v3-turbo", "large-v3", "base"]
+    }
+}
+
 fn model_name_to_filename(model_name: &str) -> &'static str {
     match model_name {
+        "base" => "ggml-base-q5_1.bin",
         "large-v3" => "ggml-large-v3-q5_0.bin",
+        "large-v3-turbo" => "ggml-large-v3-turbo-q5_0.bin",
         _ => "ggml-large-v3-turbo-q5_0.bin",
     }
+}
+
+fn candidate_model_paths_from_directory(model_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for model_name in preferred_model_names_for_platform() {
+        candidates.push(model_dir.join(model_name_to_filename(model_name)));
+    }
+
+    let Ok(entries) = std::fs::read_dir(model_dir) else {
+        return candidates;
+    };
+    let mut discovered: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|name| name.starts_with("ggml-") && name.ends_with(".bin"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    discovered.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+    for path in discovered {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    candidates
 }
 
 fn download_whisper_model_to(
@@ -275,7 +325,10 @@ fn download_whisper_model_to(
                         downloaded_bytes,
                         total_bytes,
                         percent: None,
-                        message: format!("Whisperモデルをダウンロード中 ({} bytes)", downloaded_bytes),
+                        message: format!(
+                            "Whisperモデルをダウンロード中 ({} bytes)",
+                            downloaded_bytes
+                        ),
                     });
                 }
             }
@@ -380,7 +433,53 @@ fn default_whisper_model_path_with_progress(
     ))
 }
 
-fn default_whisper_model_path(model_name: &str, allow_auto_download: bool) -> Result<String, String> {
+fn resolve_preferred_whisper_model_path(allow_auto_download: bool) -> Result<String, String> {
+    if let Ok(path) = std::env::var("KOETYPE_WHISPER_MODEL_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() && is_valid_model_file(Path::new(trimmed)) {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    if let Some(path) = crate::config::settings::get_whisper_model_path() {
+        let configured = PathBuf::from(&path);
+        if is_valid_model_file(&configured) {
+            return Ok(path);
+        }
+    }
+
+    for model_name in preferred_model_names_for_platform() {
+        let filename = model_name_to_filename(model_name);
+        if let Some(path) = bundled_whisper_model_path(filename) {
+            if is_valid_model_file(&path) {
+                return Ok(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    let app_home = koetype_home_dir()?;
+    let model_dir = app_home.join("models/whisper");
+    for candidate in candidate_model_paths_from_directory(&model_dir) {
+        if is_valid_model_file(&candidate) {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    if allow_auto_download {
+        let default_model_name = default_model_name_for_platform();
+        return default_whisper_model_path(default_model_name, true);
+    }
+
+    Err(format!(
+        "Whisperモデルが見つかりません: {}/ggml-*.bin\ndocs/whisper-model-setup.md の手順でモデルを配置してください。",
+        model_dir.display()
+    ))
+}
+
+fn default_whisper_model_path(
+    model_name: &str,
+    allow_auto_download: bool,
+) -> Result<String, String> {
     default_whisper_model_path_with_progress(model_name, allow_auto_download, None)
 }
 
@@ -428,6 +527,37 @@ pub struct WhisperRuntimeStatus {
     pub model_path: Option<String>,
     pub cli_bundled: bool,
     pub model_bundled: bool,
+}
+
+pub fn inspect_whisper_runtime_status_auto() -> WhisperRuntimeStatus {
+    let cli_path = resolve_whisper_cli_path().ok();
+    let model_path = resolve_preferred_whisper_model_path(false)
+        .ok()
+        .filter(|p| is_valid_model_file(Path::new(p)));
+
+    let bundled_root = bundled_resource_root_from_current_exe();
+    let bundled_cli_root = bundled_root.as_ref().map(|root| root.join("bin"));
+    let bundled_model_root = bundled_root
+        .as_ref()
+        .map(|root| root.join("models/whisper"));
+
+    let cli_bundled = bundled_cli_root
+        .as_ref()
+        .zip(cli_path.as_ref())
+        .map(|(root, resolved)| Path::new(resolved).starts_with(root))
+        .unwrap_or(false);
+    let model_bundled = bundled_model_root
+        .as_ref()
+        .zip(model_path.as_ref())
+        .map(|(root, resolved)| Path::new(resolved).starts_with(root))
+        .unwrap_or(false);
+
+    WhisperRuntimeStatus {
+        cli_path,
+        model_path,
+        cli_bundled,
+        model_bundled,
+    }
 }
 
 pub fn inspect_whisper_runtime_status(model_name: &str) -> WhisperRuntimeStatus {
@@ -614,7 +744,11 @@ pub async fn transcribe_audio_local(
     model_name: &str,
 ) -> Result<String, String> {
     let cli_path = resolve_whisper_cli_path()?;
-    let model_path = default_whisper_model_path(model_name, true)?;
+    let model_path = if model_name == "auto" {
+        resolve_preferred_whisper_model_path(true)?
+    } else {
+        default_whisper_model_path(model_name, true)?
+    };
     let output_base = prepare_output_base(audio_file)?;
 
     if !Path::new(audio_file).exists() {
