@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KoeType",
+  "version": "26.6.12",
+  "identifier": "com.koetype.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm build:sidecar && pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "node scripts/prepare-tauri-build.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "floating",
+        "title": "KoeType",
+        "url": "index.html",
+        "width": 600,
+        "height": 150,
+        "minWidth": 300,
+        "minHeight": 120,
+        "maxWidth": 2000,
+        "maxHeight": 1200,
+        "center": false,
+        "x": 0,
+        "y": 0,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": [
+      "bin/floating-overlay.app",
+      "bin/floating-overlay",
+      "bin/KoeType Speech Recognizer.app",
+      "bin/speech-recognizer",
+      "resources/bin/whisper-cli",
+      "resources/models/whisper/ggml-large-v3-turbo-q5_0.bin"
+    ],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  }
+}
+

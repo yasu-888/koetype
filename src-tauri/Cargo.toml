@@ -1,0 +1,71 @@
+[package]
+name = "koetype"
+version = "26.2.28"
+description = "KoeType - macOS/Windows voice input desktop app"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "koetype_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+toml = "0.8"
+
+# 音声録音
+cpal = "0.16"
+hound = "3.5"
+
+# 非同期処理
+tokio = { version = "1", features = ["full"] }
+
+# エラーハンドリング
+thiserror = "2"
+
+# ロギング
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# ユーティリティ
+dirs = "5"
+rfd = "0.15"
+
+# HTTP クライアント（文字起こしAPI）
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# Base64エンコーディング
+base64 = "0.22"
+
+# キー入力シミュレート
+enigo = "0.2"
+
+# クリップボード操作（クロスプラットフォーム）
+arboard = "3"
+image = { version = "0.25.9", default-features = false, features = ["png"] }
+
+# macOS native APIs
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.54", features = ["Foundation", "Foundation_Collections", "Globalization", "Media_SpeechRecognition"] }
+winreg = "0.52"
+
