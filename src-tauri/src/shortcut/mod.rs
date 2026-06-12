@@ -3,7 +3,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use tracing::{debug, info, warn};
 
-use crate::config::settings::{ShortcutSettings, SttProvider};
+use crate::config::settings::ShortcutSettings;
 use crate::AppState;
 
 pub(crate) fn reset_input_shortcut_state(app: &AppHandle) {
@@ -175,6 +175,62 @@ fn reset_ai_processing_state(state: &AppState) {
 fn is_whisper_runtime_missing_error(message: &str) -> bool {
     message.contains("Whisperモデルが見つかりません")
         || message.contains("whisper-cli が見つかりません")
+}
+
+/// 文字起こし失敗をUIへ通知し、フローティングを閉じてAI処理状態をリセットする。
+fn notify_transcription_failed_and_reset(app: &AppHandle, state: &AppState, message: &str) {
+    let _ = app.emit("transcription-failed", message.to_string());
+    crate::overlay::overlay_send_json(
+        app,
+        serde_json::json!({
+            "type": "transcription-failed",
+            "message": message
+        }),
+    );
+    crate::overlay::close_floating_window_after_delay(app, 2000);
+    reset_ai_processing_state(state);
+}
+
+/// 文字起こし開始後にキャンセル要求があったかを確認し、あればUIへ通知して状態をリセットする。
+fn consume_cancellation(app: &AppHandle, state: &AppState, cancel_seq_at_start: u64) -> bool {
+    let cancel_seq_now = state
+        .transcription_cancel_seq
+        .lock()
+        .ok()
+        .map(|g| *g)
+        .unwrap_or(cancel_seq_at_start);
+    if cancel_seq_now == cancel_seq_at_start {
+        return false;
+    }
+    let _ = app.emit("transcription-cancelled", ());
+    crate::overlay::overlay_send_json(
+        app,
+        serde_json::json!({ "type": "transcription-cancelled" }),
+    );
+    reset_ai_processing_state(state);
+    true
+}
+
+/// AIモード（選択テキストあり）のとき、音声テキストを編集指示として選択テキストへ適用する。
+async fn apply_voice_edit_to_selection(
+    selected_text_for_ai: Option<&str>,
+    voice_text: &str,
+) -> Result<String, String> {
+    let selected_text = selected_text_for_ai
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "選択テキストを取得できませんでした".to_string())?;
+    let api_key =
+        crate::config::get_api_key().map_err(|e| format!("APIキーの取得に失敗: {}", e))?;
+    let ai_model = crate::config::get_ai_model();
+    crate::transcription::process_selected_text_with_voice(
+        &selected_text,
+        voice_text,
+        &api_key,
+        &ai_model,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 fn emit_whisper_runtime_missing_guidance(app: &AppHandle) {
@@ -526,9 +582,6 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                     .unwrap_or(0);
                 let stt_provider = crate::config::get_stt_provider();
                 let start_time = std::time::Instant::now();
-                let mut deferred_error_logs: Vec<(crate::error_log::ErrorType, String, String)> =
-                    Vec::new();
-                let mut whisper_text_for_history: Option<String> = None;
                 let selected_text_for_ai = match crate::paste::detect_selected_text(&app) {
                     Ok(value) => value,
                     Err(e) => {
@@ -538,16 +591,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                             &e,
                             Some("detect_selected_text_after_recording"),
                         );
-                        let _ = app.emit("transcription-failed", e.clone());
-                        crate::overlay::overlay_send_json(
-                            &app,
-                            serde_json::json!({
-                                "type": "transcription-failed",
-                                "message": e
-                            }),
-                        );
-                        crate::overlay::close_floating_window_after_delay(&app, 2000);
-                        reset_ai_processing_state(&state);
+                        notify_transcription_failed_and_reset(&app, &state, &e);
                         return;
                     }
                 };
@@ -562,198 +606,35 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                     *guard = selected_text_for_ai.clone();
                 }
 
-                let transcription_result: Result<String, String> = match stt_provider {
-                    SttProvider::Gemini => match crate::config::get_api_key() {
-                        Ok(api_key) => {
-                            let model = crate::config::get_model();
-                            crate::transcription::transcribe_audio_with_model(
-                                &path_str, &api_key, &model,
-                            )
-                            .await
-                            .map_err(|e| e.to_string())
-                        }
-                        Err(_) => Err("APIキーが設定されていません".to_string()),
-                    },
-                    SttProvider::Hybrid => match recording_duration_ms {
-                        Some(duration_ms) => {
-                            let hybrid_threshold_ms =
-                                crate::config::settings::get_hybrid_threshold_ms();
-                            let lang = crate::config::settings::resolve_whisper_language();
-
-                            if duration_ms <= hybrid_threshold_ms {
-                                info!(
-                                    "Hybrid判定: {}ms <= {}ms なので Whisper で処理",
-                                    duration_ms, hybrid_threshold_ms
-                                );
-                                crate::transcription::transcribe_audio_local(
-                                    &path_str,
-                                    lang.as_str(),
-                                    "auto",
-                                )
-                                .await
-                            } else {
-                                info!(
-                                    "Hybrid判定: {}ms > {}ms なので Gemini で処理",
-                                    duration_ms, hybrid_threshold_ms
-                                );
-                                match crate::config::get_api_key() {
-                                    Ok(api_key) => {
-                                        let model = crate::config::get_model();
-                                        crate::transcription::transcribe_audio_with_model(
-                                            &path_str, &api_key, &model,
-                                        )
-                                        .await
-                                        .map_err(|e| e.to_string())
-                                    }
-                                    Err(_) => Err("APIキーが設定されていません".to_string()),
-                                }
-                            }
-                        }
-                        None => Err("Hybrid判定に必要な録音時間を取得できませんでした".to_string()),
-                    },
-                    SttProvider::Whisper => {
-                        let lang = crate::config::settings::resolve_whisper_language();
-                        crate::transcription::transcribe_audio_local(
-                            &path_str,
-                            lang.as_str(),
-                            "auto",
-                        )
-                        .await
-                    }
-                    SttProvider::Collaborate => {
-                        let lang = crate::config::settings::resolve_whisper_language();
-
-                        match crate::transcription::transcribe_audio_local(
-                            &path_str,
-                            lang.as_str(),
-                            "auto",
-                        )
-                        .await
-                        {
-                            Ok(whisper_text) => {
-                                whisper_text_for_history = Some(whisper_text.clone());
-                                let model = crate::config::get_model();
-                                let polish_result = match crate::config::get_api_key() {
-                                    Ok(api_key) => crate::transcription::polish_text_with_model(
-                                        &whisper_text,
-                                        &api_key,
-                                        &model,
-                                    )
-                                    .await
-                                    .map_err(|e| e.to_string()),
-                                    Err(e) => Err(format!("APIキーの取得に失敗: {}", e)),
-                                };
-
-                                match polish_result {
-                                    Ok(polished_text) => Ok(polished_text),
-                                    Err(e) => {
-                                        let context = format!(
-                                            "provider=collaborate, fallback=whisper, model={}, file={}",
-                                            model, path_str
-                                        );
-                                        deferred_error_logs.push((
-                                            crate::error_log::ErrorType::ApiError,
-                                            format!(
-                                                "Gemini整形に失敗したためWhisper結果を使用: {}",
-                                                e
-                                            ),
-                                            context,
-                                        ));
-                                        warn!(
-                                            "Collaborate整形失敗。Whisper結果を使用します: {}",
-                                            e
-                                        );
-                                        Ok(whisper_text)
-                                    }
-                                }
-                            }
-                            Err(e) => Err(e),
-                        }
-                    }
-                };
+                let dispatch = crate::transcription::dispatch::transcribe_with_provider(
+                    stt_provider,
+                    &path_str,
+                    recording_duration_ms,
+                )
+                .await;
+                let whisper_text_for_history = dispatch.whisper_text;
+                let mut deferred_error_logs = dispatch.deferred_error_logs;
+                let transcription_result = dispatch.result;
 
                 match transcription_result {
                     Ok(text) => {
-                        let cancel_seq_now = state
-                            .transcription_cancel_seq
-                            .lock()
-                            .ok()
-                            .map(|g| *g)
-                            .unwrap_or(cancel_seq_at_start);
-                        if cancel_seq_now != cancel_seq_at_start {
+                        if consume_cancellation(&app, &state, cancel_seq_at_start) {
                             info!("文字起こしキャンセル");
-                            let _ = app.emit("transcription-cancelled", ());
-                            crate::overlay::overlay_send_json(
-                                &app,
-                                serde_json::json!({ "type": "transcription-cancelled" }),
-                            );
-                            reset_ai_processing_state(&state);
                             return;
                         }
                         let duration_ms = start_time.elapsed().as_millis() as u64;
                         info!("完了");
 
                         let final_text = if ai_mode_active {
-                            let selected_text = selected_text_for_ai
-                                .clone()
-                                .map(|v| v.trim().to_string())
-                                .filter(|v| !v.is_empty())
-                                .ok_or_else(|| "選択テキストを取得できませんでした".to_string());
-                            let selected_text = match selected_text {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    let _ = app.emit("transcription-failed", e.clone());
-                                    crate::overlay::overlay_send_json(
-                                        &app,
-                                        serde_json::json!({
-                                            "type": "transcription-failed",
-                                            "message": e
-                                        }),
-                                    );
-                                    crate::overlay::close_floating_window_after_delay(&app, 2000);
-                                    reset_ai_processing_state(&state);
-                                    return;
-                                }
-                            };
-                            let api_key = match crate::config::get_api_key() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    let message = format!("APIキーの取得に失敗: {}", e);
-                                    let _ = app.emit("transcription-failed", message.clone());
-                                    crate::overlay::overlay_send_json(
-                                        &app,
-                                        serde_json::json!({
-                                            "type": "transcription-failed",
-                                            "message": message
-                                        }),
-                                    );
-                                    crate::overlay::close_floating_window_after_delay(&app, 2000);
-                                    reset_ai_processing_state(&state);
-                                    return;
-                                }
-                            };
-                            let ai_model = crate::config::get_ai_model();
-                            match crate::transcription::process_selected_text_with_voice(
-                                &selected_text,
+                            match apply_voice_edit_to_selection(
+                                selected_text_for_ai.as_deref(),
                                 &text,
-                                &api_key,
-                                &ai_model,
                             )
                             .await
-                            .map_err(|e| e.to_string())
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    let _ = app.emit("transcription-failed", e.clone());
-                                    crate::overlay::overlay_send_json(
-                                        &app,
-                                        serde_json::json!({
-                                            "type": "transcription-failed",
-                                            "message": e
-                                        }),
-                                    );
-                                    crate::overlay::close_floating_window_after_delay(&app, 2000);
-                                    reset_ai_processing_state(&state);
+                                    notify_transcription_failed_and_reset(&app, &state, &e);
                                     return;
                                 }
                             }
@@ -859,12 +740,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                                 &text_for_history,
                                 prompt_text_for_history_bg.as_deref(),
                                 whisper_text_for_history.as_deref(),
-                                Some(match stt_provider {
-                                    SttProvider::Gemini => "gemini",
-                                    SttProvider::Whisper => "whisper",
-                                    SttProvider::Hybrid => "hybrid",
-                                    SttProvider::Collaborate => "collaborate",
-                                }),
+                                Some(stt_provider.as_str()),
                                 duration_ms,
                             ) {
                                 debug!("履歴保存エラー: {}", e);
@@ -881,20 +757,8 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                         reset_ai_processing_state(&state);
                     }
                     Err(e) => {
-                        let cancel_seq_now = state
-                            .transcription_cancel_seq
-                            .lock()
-                            .ok()
-                            .map(|g| *g)
-                            .unwrap_or(cancel_seq_at_start);
-                        if cancel_seq_now != cancel_seq_at_start {
+                        if consume_cancellation(&app, &state, cancel_seq_at_start) {
                             info!("文字起こしエラー応答はキャンセル済みのため破棄");
-                            let _ = app.emit("transcription-cancelled", ());
-                            crate::overlay::overlay_send_json(
-                                &app,
-                                serde_json::json!({ "type": "transcription-cancelled" }),
-                            );
-                            reset_ai_processing_state(&state);
                             return;
                         }
                         let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -952,12 +816,7 @@ async fn handle_shortcut_toggle(app: AppHandle) {
                                         &error_text,
                                         Some(os_text),
                                         None,
-                                        Some(match stt_provider {
-                                            SttProvider::Gemini => "gemini",
-                                            SttProvider::Whisper => "whisper",
-                                            SttProvider::Hybrid => "hybrid",
-                                            SttProvider::Collaborate => "collaborate",
-                                        }),
+                                        Some(stt_provider.as_str()),
                                         duration_ms,
                                     )
                                 {

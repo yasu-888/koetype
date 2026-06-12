@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 
 const MAX_ERROR_LOG_ITEMS: usize = 500;
@@ -28,29 +27,17 @@ pub struct ErrorLogManager;
 
 impl ErrorLogManager {
     fn get_error_log_path() -> PathBuf {
-        let mut path = crate::config::settings::get_app_home_dir();
-        path.push("error_log.json");
-        path
+        crate::util::app_data_file("error_log.json")
     }
 
     /// エラーログを読み込み
     pub fn load_error_log() -> Vec<ErrorLogEntry> {
-        let path = Self::get_error_log_path();
-        if !path.exists() {
-            return Vec::new();
-        }
-
-        let content = fs::read_to_string(path).unwrap_or_default();
-        serde_json::from_str(&content).unwrap_or_default()
+        crate::util::load_json_or_default(&Self::get_error_log_path())
     }
 
     /// エラーログを保存
     fn save_error_log(entries: &[ErrorLogEntry]) -> Result<(), String> {
-        let path = Self::get_error_log_path();
-        let content =
-            serde_json::to_string_pretty(entries).map_err(|e| format!("JSON作成失敗: {}", e))?;
-        fs::write(path, content).map_err(|e| format!("ファイル書き込み失敗: {}", e))?;
-        Ok(())
+        crate::util::save_json_pretty(&Self::get_error_log_path(), entries, "エラーログ")
     }
 
     /// エラーを追加

@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { ClockCounterClockwiseIcon, CopyIcon, WarningIcon, TrashIcon, type IconProps } from "@phosphor-icons/react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { HistoryItem } from "../types";
+import { useTauriListen } from "../hooks/useTauriListen";
 import { formatDate, formatDuration } from "../utils/format";
 import { ConfirmModal } from "./ConfirmModal";
 
@@ -53,13 +53,8 @@ export function HistoryView() {
 
   useEffect(() => {
     loadHistory();
-    const unlistenPromise = listen("transcription-completed", () => {
-      loadHistory();
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
   }, [loadHistory]);
+  useTauriListen("transcription-completed", loadHistory);
 
   useEffect(() => {
     const loadHybridThreshold = async () => {

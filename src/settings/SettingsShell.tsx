@@ -1,8 +1,8 @@
 /** @format */
 
 import { useState, useEffect, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useTauriListen } from "../hooks/useTauriListen";
 import { MegaphoneSimpleIcon } from "@phosphor-icons/react";
 import { SettingsTab } from "./SettingsTab";
 import { HistoryView } from "../components/HistoryView";
@@ -53,14 +53,10 @@ export function SettingsShell({ defaultTab = "settings" }: { defaultTab?: TabTyp
     }
 
     switchTab(initialTab);
-
-    const unlistenPromise = listen<TabType>("switch-tab", (event) => {
-      switchTab(event.payload);
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
   }, [defaultTab, switchTab]);
+  useTauriListen<TabType>("switch-tab", (event) => {
+    switchTab(event.payload);
+  });
 
   const handleOpenSupportLink = useCallback(async () => {
     try {

@@ -59,17 +59,12 @@ pub(crate) struct PasteSelfTestResult {
 }
 
 fn paste_diag_log_path() -> std::path::PathBuf {
-    let mut path = crate::config::settings::get_app_home_dir();
-    path.push("paste_diag.jsonl");
-    path
+    crate::util::app_data_file("paste_diag.jsonl")
 }
 
 pub(crate) fn append_paste_diag_log(entry: &LastPasteAttempt) {
     let path = paste_diag_log_path();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = crate::util::current_unix_timestamp_secs();
 
     let row = serde_json::json!({
         "timestamp": now,
@@ -178,17 +173,33 @@ pub(crate) fn detect_selected_text(app: &AppHandle) -> Result<Option<String>, St
     Ok(None)
 }
 
-pub(crate) fn resolve_latest_os_text(app: &AppHandle) -> Option<String> {
-    if let Ok(state) = app.state::<crate::AppState>().latest_os_text.lock() {
-        if let Some(text) = state.as_ref().map(|t| t.trim().to_string()) {
+/// AppState 上の最新テキスト（メモリ）を優先し、空なら履歴ファイルへフォールバックして解決する。
+fn resolve_latest_text(
+    app: &AppHandle,
+    pick_state: impl FnOnce(&crate::AppState) -> &std::sync::Mutex<Option<String>>,
+    fallback: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let state = app.state::<crate::AppState>();
+    if let Ok(guard) = pick_state(&state).lock() {
+        if let Some(text) = guard.as_ref().map(|t| t.trim().to_string()) {
             if !text.is_empty() {
                 return Some(text);
             }
         }
     }
-    crate::history::HistoryManager::get_last_dictation_text()
+    fallback()
 }
 
+pub(crate) fn resolve_latest_os_text(app: &AppHandle) -> Option<String> {
+    resolve_latest_text(
+        app,
+        |s| &s.latest_os_text,
+        crate::history::HistoryManager::get_last_dictation_text,
+    )
+}
+
+/// 補助テキスト（サブ枠に表示するテキスト）の解決。
+/// Collaborate モードでは Whisper の結果が補助、それ以外では OS 標準音声入力が補助になる。
 pub(crate) fn resolve_latest_aux_text(app: &AppHandle) -> Option<String> {
     if crate::config::get_stt_provider() == crate::config::settings::SttProvider::Collaborate {
         if let Some(text) = crate::history::HistoryManager::get_last_whisper_text() {
@@ -199,14 +210,11 @@ pub(crate) fn resolve_latest_aux_text(app: &AppHandle) -> Option<String> {
 }
 
 pub(crate) fn resolve_latest_llm_text(app: &AppHandle) -> Option<String> {
-    if let Ok(state) = app.state::<crate::AppState>().latest_llm_text.lock() {
-        if let Some(text) = state.as_ref().map(|t| t.trim().to_string()) {
-            if !text.is_empty() {
-                return Some(text);
-            }
-        }
-    }
-    crate::history::HistoryManager::get_last_transcription().map(|item| item.text)
+    resolve_latest_text(
+        app,
+        |s| &s.latest_llm_text,
+        || crate::history::HistoryManager::get_last_transcription().map(|item| item.text),
+    )
 }
 
 pub(crate) fn paste_text_preserving_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
@@ -341,6 +349,9 @@ pub(crate) fn paste_text_preserving_clipboard(app: &AppHandle, text: &str) -> Re
                     }
                 }
 
+                // Cmd+V の貼り付けは対象アプリ側で非同期に処理されるため、
+                // 復元が早すぎると貼り付け前にクリップボードが書き戻されてしまう。
+                // 重いアプリでも間に合うよう余裕を持って待つ。
                 std::thread::sleep(std::time::Duration::from_millis(1500));
                 restore_attempted = Some(true);
                 match crate::clipboard::macos_pasteboard::restore_general_pasteboard(&snapshot) {
@@ -420,6 +431,7 @@ pub(crate) fn paste_text_preserving_clipboard(app: &AppHandle, text: &str) -> Re
                 return Err(e);
             }
         }
+        // Ctrl+V の処理完了を待ってから復元する（早すぎると貼り付け前に書き戻される）
         std::thread::sleep(std::time::Duration::from_millis(200));
         match prev_clipboard {
             Some(prev_text) => {

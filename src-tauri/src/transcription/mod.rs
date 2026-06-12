@@ -1,3 +1,4 @@
+pub mod dispatch;
 pub mod gemini;
 pub mod whisper_local;
 

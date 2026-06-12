@@ -11,8 +11,9 @@ import {
   WallIcon,
 } from "@phosphor-icons/react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { DailyUsagePoint } from "../types";
+import { formatDateKey } from "../utils/format";
+import { useTauriListen } from "../hooks/useTauriListen";
 
 const Icons = {
   Stats: () => <ChartBarIcon className="w-5 h-5" weight="regular" />,
@@ -22,13 +23,6 @@ const Icons = {
   Count: () => <WallIcon className="w-5 h-5" weight="regular" />,
   Play: () => <PlayIcon className="w-5 h-5" weight="regular" />,
   Timer: () => <TimerIcon className="w-5 h-5" weight="regular" />,
-};
-
-const formatDateKey = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 };
 
 function ContributionGraph({ dailyUsage }: { dailyUsage: DailyUsagePoint[] }) {
@@ -157,13 +151,8 @@ export function StatsView() {
 
   useEffect(() => {
     loadData();
-    const unlistenPromise = listen("transcription-completed", () => {
-      loadData();
-    });
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
   }, [loadData]);
+  useTauriListen("transcription-completed", loadData);
   const today = new Date();
   const todayKey = formatDateKey(today);
   const monthPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;

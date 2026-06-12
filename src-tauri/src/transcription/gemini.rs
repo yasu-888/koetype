@@ -106,22 +106,26 @@ async fn call_gemini_api(
         .map_err(|e| TranscriptionError::ParseResponse(format!("JSONパースエラー: {}", e)))
 }
 
-/// レスポンスからテキストを抽出する共通ヘルパー
+/// レスポンスの最初の candidate の最初の part のテキストを抽出する
 fn extract_text_from_response(response: GeminiResponse) -> Result<String, TranscriptionError> {
     response
         .candidates
         .and_then(|candidates| candidates.into_iter().next())
-        .and_then(|candidate| {
-            candidate
-                .content
-                .parts
-                .into_iter()
-                .map(|part| part.text)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .next()
-        })
+        .and_then(|candidate| candidate.content.parts.into_iter().map(|part| part.text).next())
         .ok_or(TranscriptionError::EmptyResult)
+}
+
+/// 単一 Content のリクエストで Gemini を呼び、テキストを取り出す共通ヘルパー
+async fn generate_text(
+    api_key: &str,
+    model: &str,
+    parts: Vec<Part>,
+) -> Result<String, TranscriptionError> {
+    let request_body = GeminiRequest {
+        contents: vec![Content { parts }],
+    };
+    let response = call_gemini_api(api_key, model, &request_body).await?;
+    extract_text_from_response(response)
 }
 
 /// ユーザー辞書プロンプト文字列を構築する共通ヘルパー
@@ -176,22 +180,20 @@ pub async fn transcribe_audio_with_model(
         dictionary_prompt
     );
 
-    let request_body = GeminiRequest {
-        contents: vec![Content {
-            parts: vec![
-                Part::Text { text: prompt },
-                Part::InlineData {
-                    inline_data: InlineData {
-                        mime_type: "audio/wav".to_string(),
-                        data: audio_base64,
-                    },
+    let text = generate_text(
+        api_key,
+        model,
+        vec![
+            Part::Text { text: prompt },
+            Part::InlineData {
+                inline_data: InlineData {
+                    mime_type: "audio/wav".to_string(),
+                    data: audio_base64,
                 },
-            ],
-        }],
-    };
-
-    let response = call_gemini_api(api_key, model, &request_body).await?;
-    let text = extract_text_from_response(response)?;
+            },
+        ],
+    )
+    .await?;
 
     debug!("文字起こし完了: {} 文字", text.len());
     Ok(text.trim().to_string())
@@ -233,14 +235,7 @@ pub async fn polish_text_with_model(
         dictionary_prompt, trimmed_input
     );
 
-    let request_body = GeminiRequest {
-        contents: vec![Content {
-            parts: vec![Part::Text { text: prompt }],
-        }],
-    };
-
-    let response = call_gemini_api(api_key, model, &request_body).await?;
-    let text = extract_text_from_response(response)?;
+    let text = generate_text(api_key, model, vec![Part::Text { text: prompt }]).await?;
 
     let polished = text.trim().to_string();
     if polished.is_empty() {
@@ -286,14 +281,10 @@ pub async fn process_selected_text_with_voice(
         selected, voice
     );
 
-    let request_body = GeminiRequest {
-        contents: vec![Content {
-            parts: vec![Part::Text { text: prompt }],
-        }],
-    };
-
-    let response = call_gemini_api(api_key, model, &request_body).await?;
-    let edited = extract_text_from_response(response)?.trim().to_string();
+    let edited = generate_text(api_key, model, vec![Part::Text { text: prompt }])
+        .await?
+        .trim()
+        .to_string();
 
     if edited.is_empty() {
         return Err(TranscriptionError::EmptyResult);
@@ -306,16 +297,14 @@ pub async fn process_selected_text_with_voice(
 pub async fn test_connection(api_key: &str, model: &str) -> Result<String, TranscriptionError> {
     debug!("Gemini API接続テスト開始 (モデル: {})", model);
 
-    let request_body = GeminiRequest {
-        contents: vec![Content {
-            parts: vec![Part::Text {
-                text: "こんにちは".to_string(),
-            }],
+    let text = generate_text(
+        api_key,
+        model,
+        vec![Part::Text {
+            text: "こんにちは".to_string(),
         }],
-    };
-
-    let response = call_gemini_api(api_key, model, &request_body).await?;
-    let text = extract_text_from_response(response)?;
+    )
+    .await?;
 
     debug!("接続テスト成功: レスポンス受信");
     Ok(format!(

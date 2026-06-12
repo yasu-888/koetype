@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -167,13 +166,6 @@ fn resolve_whisper_cli_path() -> Result<String, String> {
     ))
 }
 
-fn koetype_home_dir() -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("KOETYPE_HOME") {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(crate::config::settings::get_app_home_dir())
-}
-
 pub fn default_model_name_for_platform() -> &'static str {
     if cfg!(target_os = "windows") {
         "base"
@@ -231,6 +223,24 @@ fn candidate_model_paths_from_directory(model_dir: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+fn downloading_progress(downloaded_bytes: u64, total_bytes: Option<u64>) -> WhisperInstallProgress {
+    let percent = total_bytes.map(|total| {
+        let ratio = (downloaded_bytes as f64 / total as f64) * 100.0;
+        ratio.clamp(0.0, 100.0).round() as u8
+    });
+    let message = match percent {
+        Some(p) => format!("Whisperモデルをダウンロード中 ({}%)", p),
+        None => format!("Whisperモデルをダウンロード中 ({} bytes)", downloaded_bytes),
+    };
+    WhisperInstallProgress {
+        phase: "downloading".to_string(),
+        downloaded_bytes,
+        total_bytes,
+        percent,
+        message,
+    }
+}
+
 fn download_whisper_model_to(
     model_name: &str,
     model_path: &Path,
@@ -256,17 +266,7 @@ fn download_whisper_model_to(
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("Whisperモデルのダウンロードに失敗: {}", e))?;
     let total_bytes = response.content_length();
-    on_progress(WhisperInstallProgress {
-        phase: "downloading".to_string(),
-        downloaded_bytes: 0,
-        total_bytes,
-        percent: total_bytes.map(|_| 0),
-        message: if total_bytes.is_some() {
-            "Whisperモデルをダウンロード中 (0%)".to_string()
-        } else {
-            "Whisperモデルをダウンロード中 (0 bytes)".to_string()
-        },
-    });
+    on_progress(downloading_progress(0, total_bytes));
 
     let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
         format!(
@@ -298,21 +298,14 @@ fn download_whisper_model_to(
             )
         })?;
         downloaded_bytes += read_size as u64;
-        let percent = total_bytes.map(|total| {
-            let ratio = (downloaded_bytes as f64 / total as f64) * 100.0;
-            ratio.clamp(0.0, 100.0).round() as u8
-        });
-        match percent {
+        let progress = downloading_progress(downloaded_bytes, total_bytes);
+        // 進捗の通知頻度を抑える: 合計サイズが分かる場合は 1% 刻み、
+        // 分からない場合は 4MiB 刻みで通知する。
+        match progress.percent {
             Some(p) => {
                 if Some(p) != last_percent {
                     last_percent = Some(p);
-                    on_progress(WhisperInstallProgress {
-                        phase: "downloading".to_string(),
-                        downloaded_bytes,
-                        total_bytes,
-                        percent: Some(p),
-                        message: format!("Whisperモデルをダウンロード中 ({}%)", p),
-                    });
+                    on_progress(progress);
                 }
             }
             None => {
@@ -320,29 +313,14 @@ fn download_whisper_model_to(
                     >= UNKNOWN_TOTAL_REPORT_STEP_BYTES
                 {
                     last_reported_bytes = downloaded_bytes;
-                    on_progress(WhisperInstallProgress {
-                        phase: "downloading".to_string(),
-                        downloaded_bytes,
-                        total_bytes,
-                        percent: None,
-                        message: format!(
-                            "Whisperモデルをダウンロード中 ({} bytes)",
-                            downloaded_bytes
-                        ),
-                    });
+                    on_progress(progress);
                 }
             }
         }
     }
 
     if total_bytes.is_none() && downloaded_bytes != last_reported_bytes {
-        on_progress(WhisperInstallProgress {
-            phase: "downloading".to_string(),
-            downloaded_bytes,
-            total_bytes,
-            percent: None,
-            message: format!("Whisperモデルをダウンロード中 ({} bytes)", downloaded_bytes),
-        });
+        on_progress(downloading_progress(downloaded_bytes, total_bytes));
     }
 
     file.flush().map_err(|e| {
@@ -383,7 +361,7 @@ fn download_whisper_model_to(
 fn default_whisper_model_path_with_progress(
     model_name: &str,
     allow_auto_download: bool,
-    mut on_progress: Option<&mut dyn FnMut(WhisperInstallProgress)>,
+    on_progress: Option<&mut dyn FnMut(WhisperInstallProgress)>,
 ) -> Result<String, String> {
     if let Ok(path) = std::env::var("KOETYPE_WHISPER_MODEL_PATH") {
         return Ok(path);
@@ -401,7 +379,7 @@ fn default_whisper_model_path_with_progress(
             return Ok(path.to_string_lossy().to_string());
         }
     }
-    let app_home = koetype_home_dir()?;
+    let app_home = crate::config::settings::get_app_home_dir();
     let model_path = app_home.join(format!("models/whisper/{}", filename));
 
     if is_valid_model_file(&model_path) {
@@ -409,19 +387,19 @@ fn default_whisper_model_path_with_progress(
     }
 
     if allow_auto_download {
-        if let Some(callback) = on_progress.as_mut() {
-            callback(WhisperInstallProgress {
-                phase: "preparing".to_string(),
-                downloaded_bytes: 0,
-                total_bytes: None,
-                percent: Some(0),
-                message: "Whisperモデルのダウンロードを準備中".to_string(),
-            });
-            download_whisper_model_to(model_name, &model_path, *callback)?;
-        } else {
-            let mut noop = |_progress: WhisperInstallProgress| {};
-            download_whisper_model_to(model_name, &model_path, &mut noop)?;
-        }
+        let mut noop = |_progress: WhisperInstallProgress| {};
+        let callback: &mut dyn FnMut(WhisperInstallProgress) = match on_progress {
+            Some(cb) => cb,
+            None => &mut noop,
+        };
+        callback(WhisperInstallProgress {
+            phase: "preparing".to_string(),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: Some(0),
+            message: "Whisperモデルのダウンロードを準備中".to_string(),
+        });
+        download_whisper_model_to(model_name, &model_path, callback)?;
         if is_valid_model_file(&model_path) {
             return Ok(model_path.to_string_lossy().to_string());
         }
@@ -457,7 +435,7 @@ fn resolve_preferred_whisper_model_path(allow_auto_download: bool) -> Result<Str
         }
     }
 
-    let app_home = koetype_home_dir()?;
+    let app_home = crate::config::settings::get_app_home_dir();
     let model_dir = app_home.join("models/whisper");
     for candidate in candidate_model_paths_from_directory(&model_dir) {
         if is_valid_model_file(&candidate) {
@@ -560,42 +538,12 @@ pub fn inspect_whisper_runtime_status_auto() -> WhisperRuntimeStatus {
     }
 }
 
-pub fn inspect_whisper_runtime_status(model_name: &str) -> WhisperRuntimeStatus {
-    let filename = model_name_to_filename(model_name);
-    let bundled_cli = bundled_whisper_cli_path().filter(|p| p.exists());
-    let bundled_model = bundled_whisper_model_path(filename).filter(|p| is_valid_model_file(p));
-
-    let cli_path = resolve_whisper_cli_path().ok();
-    let model_path = default_whisper_model_path(model_name, false)
-        .ok()
-        .filter(|p| is_valid_model_file(Path::new(p)));
-    let cli_bundled = bundled_cli
-        .as_ref()
-        .and_then(|p| p.to_str())
-        .zip(cli_path.as_deref())
-        .map(|(bundled, resolved)| bundled == resolved)
-        .unwrap_or(false);
-    let model_bundled = bundled_model
-        .as_ref()
-        .and_then(|p| p.to_str())
-        .zip(model_path.as_deref())
-        .map(|(bundled, resolved)| bundled == resolved)
-        .unwrap_or(false);
-
-    WhisperRuntimeStatus {
-        cli_path,
-        model_path,
-        cli_bundled,
-        model_bundled,
-    }
-}
-
 fn prepare_output_base(audio_file: &str) -> Result<String, String> {
     if let Ok(path) = std::env::var("KOETYPE_WHISPER_OUTPUT_BASE") {
         return Ok(path);
     }
 
-    let app_home = koetype_home_dir()?;
+    let app_home = crate::config::settings::get_app_home_dir();
     let output_dir = if let Ok(path) = std::env::var("KOETYPE_WHISPER_OUTPUT_DIR") {
         PathBuf::from(path)
     } else if let Some(path) = crate::config::settings::get_whisper_output_dir() {
@@ -617,10 +565,7 @@ fn prepare_output_base(audio_file: &str) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or("recording");
 
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let ts = crate::util::current_unix_timestamp_secs();
 
     Ok(output_dir
         .join(format!("{}_{}", stem, ts))
@@ -656,10 +601,7 @@ fn append_transcript_jsonl(
     model_path: &str,
     text: &str,
 ) -> Result<(), String> {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let ts = crate::util::current_unix_timestamp_secs();
     let row = serde_json::json!({
         "timestamp": ts,
         "provider": "whisper-local",
@@ -694,7 +636,7 @@ fn append_transcript_jsonl(
 }
 
 fn append_whisper_log(stdout: &[u8], stderr: &[u8]) -> Result<(), String> {
-    let app_home = koetype_home_dir()?;
+    let app_home = crate::config::settings::get_app_home_dir();
     let log_dir = if let Ok(path) = std::env::var("KOETYPE_LOG_DIR") {
         PathBuf::from(path)
     } else if let Some(path) = crate::config::settings::get_whisper_log_dir() {
@@ -809,4 +751,52 @@ pub async fn transcribe_audio_local(
     let _ = std::fs::remove_file(&txt_path);
 
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn looks_like_path_detects_separators_and_absolute() {
+        assert!(looks_like_path("/usr/local/bin/whisper-cli"));
+        assert!(looks_like_path("bin/whisper-cli"));
+        assert!(looks_like_path("bin\\whisper-cli.exe"));
+        assert!(!looks_like_path("whisper-cli"));
+    }
+
+    // モデル名→ファイル名の対応は HuggingFace 上の配布ファイル名と一致している必要がある
+    #[test]
+    fn model_name_maps_to_quantized_ggml_filename() {
+        assert_eq!(model_name_to_filename("base"), "ggml-base-q5_1.bin");
+        assert_eq!(model_name_to_filename("large-v3"), "ggml-large-v3-q5_0.bin");
+        assert_eq!(
+            model_name_to_filename("large-v3-turbo"),
+            "ggml-large-v3-turbo-q5_0.bin"
+        );
+        // 未知のモデル名は turbo へフォールバック
+        assert_eq!(
+            model_name_to_filename("unknown"),
+            "ggml-large-v3-turbo-q5_0.bin"
+        );
+    }
+
+    #[test]
+    fn downloading_progress_formats_percent_when_total_known() {
+        let p = downloading_progress(50, Some(200));
+        assert_eq!(p.percent, Some(25));
+        assert_eq!(p.message, "Whisperモデルをダウンロード中 (25%)");
+    }
+
+    #[test]
+    fn downloading_progress_formats_bytes_when_total_unknown() {
+        let p = downloading_progress(1024, None);
+        assert_eq!(p.percent, None);
+        assert_eq!(p.message, "Whisperモデルをダウンロード中 (1024 bytes)");
+    }
+
+    #[test]
+    fn output_txt_path_appends_extension() {
+        assert_eq!(output_txt_path("/tmp/rec_123"), "/tmp/rec_123.txt");
+    }
 }

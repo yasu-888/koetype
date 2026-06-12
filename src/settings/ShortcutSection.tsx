@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { AppleLogoIcon, CaretDownIcon, CheckIcon, CircleNotchIcon, CommandIcon, CopyIcon } from "@phosphor-icons/react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { ShortcutSettings } from "../types";
 import { getErrorMessage } from "../utils/error";
+import { getPlatform } from "../utils/platform";
+import { useTauriListen } from "../hooks/useTauriListen";
 import { inputClass } from "../utils/styles";
 import { buildShortcutFromEvent } from "./shortcuts";
 import { Card, CardItem } from "../components/Card";
@@ -29,17 +30,6 @@ const saveFeedbackCompactButtonClass = (state: "idle" | "saving" | "success") =>
   state === "saving"
     ? "bg-transparent text-gray-500 h-10 px-3 min-w-[84px] rounded-lg flex items-center justify-center cursor-not-allowed text-sm flex-shrink-0 whitespace-nowrap transition"
     : `${saveButtonClass} ${state === "success" ? "bg-emerald-600 hover:bg-emerald-600 text-white shadow-emerald-200" : ""}`.trim();
-
-function getPlatform(): "macos" | "windows" | "" {
-  const navPlatform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    "";
-  const lower = navPlatform.toLowerCase();
-  if (lower.includes("mac")) return "macos";
-  if (lower.includes("win")) return "windows";
-  return "";
-}
 
 interface ShortcutSectionProps {
   sttProvider: SttProvider;
@@ -69,16 +59,14 @@ export function ShortcutSection({ sttProvider }: ShortcutSectionProps) {
 
   useEffect(() => {
     loadShortcuts();
-    const unlistenPromise = listen("shortcuts-updated", () => {
-      loadShortcuts();
-    });
     return () => {
-      unlistenPromise.then((fn) => fn());
+      // 編集中（ショートカット一時停止中）にアンマウントされた場合の復帰保証
       if (pausedShortcutsRef.current) {
         invoke("resume_shortcuts").catch(() => {});
       }
     };
   }, [loadShortcuts]);
+  useTauriListen("shortcuts-updated", loadShortcuts);
 
   const startEditShortcut = async (target: "input" | "os") => {
     try {

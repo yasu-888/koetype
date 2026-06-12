@@ -12,6 +12,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { AudioDevice, FeedbackMode, InputDeliveryMode } from "../types";
 import { getErrorMessage } from "../utils/error";
+import { getPlatform } from "../utils/platform";
 import { inputClass, selectClass, selectContainerClass, selectIconClass } from "../utils/styles";
 import { FEEDBACK_OPTIONS, LANGUAGE_OPTIONS } from "./options";
 import { Card, CardItem } from "../components/Card";
@@ -24,17 +25,6 @@ const parseDurationMsFromSecondsInput = (value: string): number | null => {
   if (!Number.isFinite(seconds) || seconds < 0) return null;
   return Math.round(seconds * 1000);
 };
-
-function getPlatform(): "macos" | "windows" | "" {
-  const navPlatform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    "";
-  const lower = navPlatform.toLowerCase();
-  if (lower.includes("mac")) return "macos";
-  if (lower.includes("win")) return "windows";
-  return "";
-}
 
 const Icons = {
   ChevronDown: () => <CaretDownIcon className="w-4 h-4 text-gray-500" weight="bold" />,

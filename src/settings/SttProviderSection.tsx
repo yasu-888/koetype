@@ -1,6 +1,6 @@
 /** @format */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { BarnIcon, BrainIcon, CaretDownIcon, CheckIcon, CircleNotchIcon, TimerIcon } from "@phosphor-icons/react";
 import { invoke } from "@tauri-apps/api/core";
 import { SttProvider } from "../types";
@@ -15,8 +15,11 @@ import {
 } from "../utils/styles";
 import { MODELS, STT_PROVIDERS } from "./options";
 import { Card, CardItem } from "../components/Card";
+import { useTimedState } from "../hooks/useTimedState";
+import { testButtonLabel, testButtonStateClass, type TestResult } from "./testButton";
 
 const DEFAULT_WHISPER_MODEL_PATH = "__whisper_model_auto__";
+const TEST_RESULT_VISIBLE_MS = 3000;
 
 const Icons = {
   Barn: () => <BarnIcon className="w-5 h-5 text-gray-400" weight="regular" />,
@@ -37,10 +40,9 @@ export function SttProviderSection({ onProviderChange }: SttProviderSectionProps
   const [whisperModelPath, setWhisperModelPath] = useState<string>(DEFAULT_WHISPER_MODEL_PATH);
   const [whisperModelOptions, setWhisperModelOptions] = useState<string[]>([]);
   const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, showTimedTestResult] = useTimedState<TestResult>(TEST_RESULT_VISIBLE_MS);
   const [saveHybridThresholdState, setSaveHybridThresholdState] = useState<"idle" | "saving" | "success">("idle");
   const [hybridThresholdSeconds, setHybridThresholdSeconds] = useState<string>("10");
-  const testResultTimerRef = useRef<number | null>(null);
 
   const alertActionError = useCallback((prefix: string, error: unknown) => {
     alert(`${prefix}: ${getErrorMessage(error)}`);
@@ -89,27 +91,6 @@ export function SttProviderSection({ onProviderChange }: SttProviderSectionProps
     };
     load();
   }, [onProviderChange]);
-
-  useEffect(() => {
-    return () => {
-      if (testResultTimerRef.current !== null) {
-        window.clearTimeout(testResultTimerRef.current);
-      }
-    };
-  }, []);
-
-  const showTimedTestResult = (result: { success: boolean; message: string } | null) => {
-    if (testResultTimerRef.current !== null) {
-      window.clearTimeout(testResultTimerRef.current);
-      testResultTimerRef.current = null;
-    }
-    setTestResult(result);
-    if (!result) return;
-    testResultTimerRef.current = window.setTimeout(() => {
-      setTestResult(null);
-      testResultTimerRef.current = null;
-    }, 3000);
-  };
 
   const handleSaveSttProvider = async (provider: SttProvider) => {
     try {
@@ -201,13 +182,6 @@ export function SttProviderSection({ onProviderChange }: SttProviderSectionProps
     }
   };
 
-  const testButtonStateClass = testResult
-    ? testResult.success
-      ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700"
-      : "bg-[#bc002d]/10 border-[#bc002d]/35 text-[#bc002d] hover:bg-[#bc002d]/10 hover:border-[#bc002d]/35 hover:text-[#bc002d]"
-    : "";
-  const testButtonLabel = isTesting ? "テスト中" : testResult ? (testResult.success ? "成功" : "失敗") : "テスト";
-
   const renderWhisperModelOptionLabel = (path: string) => path.split(/[/\\]/).pop() || path;
 
   return (
@@ -298,10 +272,10 @@ export function SttProviderSection({ onProviderChange }: SttProviderSectionProps
                 <button
                   onClick={handleTestConnection}
                   disabled={isTesting}
-                  className={`${secondaryButtonClass} ${testButtonStateClass}`.trim()}
+                  className={`${secondaryButtonClass} ${testButtonStateClass(testResult)}`.trim()}
                   title={testResult?.message || ""}
                 >
-                  {testButtonLabel}
+                  {testButtonLabel(isTesting, testResult)}
                 </button>
               </div>
             </div>

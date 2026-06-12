@@ -7,6 +7,10 @@ import { getErrorMessage } from "../utils/error";
 import { inputClass, secondaryButtonClass, selectClass, selectContainerClass, selectIconClass } from "../utils/styles";
 import { MODELS } from "./options";
 import { Card, CardItem } from "../components/Card";
+import { useTimedState } from "../hooks/useTimedState";
+import { testButtonLabel, testButtonStateClass, type TestResult } from "./testButton";
+
+const TEST_RESULT_VISIBLE_MS = 3000;
 
 const AUTO_SAVE_DEBOUNCE_MS = 700;
 
@@ -23,12 +27,11 @@ export function GeminiSection() {
   const [aiModel, setAiModel] = useState("gemini-2.5-flash-lite");
 
   const [isAiTesting, setIsAiTesting] = useState(false);
-  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [aiTestResult, showTimedAiTestResult] = useTimedState<TestResult>(TEST_RESULT_VISIBLE_MS);
 
   const settingsReadyRef = useRef(false);
   const lastSavedApiKeyRef = useRef<string>("");
   const apiKeyDebounceTimerRef = useRef<number | null>(null);
-  const aiTestResultTimerRef = useRef<number | null>(null);
 
   const alertActionError = useCallback((prefix: string, error: unknown) => {
     alert(`${prefix}: ${getErrorMessage(error)}`);
@@ -56,7 +59,6 @@ export function GeminiSection() {
     load();
     return () => {
       if (apiKeyDebounceTimerRef.current !== null) window.clearTimeout(apiKeyDebounceTimerRef.current);
-      if (aiTestResultTimerRef.current !== null) window.clearTimeout(aiTestResultTimerRef.current);
     };
   }, []);
 
@@ -99,19 +101,6 @@ export function GeminiSection() {
     }
   };
 
-  const showTimedAiTestResult = (result: { success: boolean; message: string } | null) => {
-    if (aiTestResultTimerRef.current !== null) {
-      window.clearTimeout(aiTestResultTimerRef.current);
-      aiTestResultTimerRef.current = null;
-    }
-    setAiTestResult(result);
-    if (!result) return;
-    aiTestResultTimerRef.current = window.setTimeout(() => {
-      setAiTestResult(null);
-      aiTestResultTimerRef.current = null;
-    }, 3000);
-  };
-
   const handleTestAiConnection = async () => {
     if (!apiKey) {
       showTimedAiTestResult({ success: false, message: "先にAPIキーを入力してください" });
@@ -128,19 +117,6 @@ export function GeminiSection() {
       setIsAiTesting(false);
     }
   };
-
-  const aiTestButtonStateClass = aiTestResult
-    ? aiTestResult.success
-      ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700"
-      : "bg-[#bc002d]/10 border-[#bc002d]/35 text-[#bc002d] hover:bg-[#bc002d]/10 hover:border-[#bc002d]/35 hover:text-[#bc002d]"
-    : "";
-  const aiTestButtonLabel = isAiTesting
-    ? "テスト中"
-    : aiTestResult
-      ? aiTestResult.success
-        ? "成功"
-        : "失敗"
-      : "テスト";
 
   return (
     <div className="mb-12">
@@ -182,10 +158,10 @@ export function GeminiSection() {
               <button
                 onClick={handleTestAiConnection}
                 disabled={isAiTesting}
-                className={`${secondaryButtonClass} ${aiTestButtonStateClass}`.trim()}
+                className={`${secondaryButtonClass} ${testButtonStateClass(aiTestResult)}`.trim()}
                 title={aiTestResult?.message || ""}
               >
-                {aiTestButtonLabel}
+                {testButtonLabel(isAiTesting, aiTestResult)}
               </button>
             </div>
           </div>

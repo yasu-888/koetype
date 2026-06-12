@@ -1,7 +1,6 @@
 /** @format */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
   currentMonitor,
@@ -11,6 +10,8 @@ import {
   primaryMonitor,
 } from "@tauri-apps/api/window";
 import { FeedbackMode, FeedbackSettings } from "./types";
+import { getPlatform } from "./utils/platform";
+import { useTauriListen } from "./hooks/useTauriListen";
 
 // アプリケーションの状態
 type AppStatus = "idle" | "recording" | "transcribing" | "injecting" | "done" | "error";
@@ -35,7 +36,7 @@ function FloatingStatus() {
 
   // Settings
   const [soundMode, setSoundMode] = useState<FeedbackMode>("FullscreenOnly");
-  const isWindows = navigator.userAgent.toLowerCase().includes("windows");
+  const isWindows = getPlatform() === "windows";
   const [audioLevelSmooth, setAudioLevelSmooth] = useState(0);
   const [micSensitivity, setMicSensitivity] = useState(1.0);
   const [waveMotionScale, setWaveMotionScale] = useState(1.0);
@@ -121,23 +122,18 @@ function FloatingStatus() {
       }
     };
     loadSettings();
-
-    const unlisten = listen<FeedbackSettings>("settings-updated", (event) => {
-      setSoundMode(event.payload.sound_mode);
-    });
-    const unlistenSpectrumParams = listen<{ mic_sensitivity: number; wave_motion_scale: number }>(
-      "spectrum-ui-settings-updated",
-      (event) => {
-        setMicSensitivity(event.payload.mic_sensitivity);
-        setWaveMotionScale(event.payload.wave_motion_scale);
-      }
-    );
-
-    return () => {
-      unlisten.then((fn) => fn());
-      unlistenSpectrumParams.then((fn) => fn());
-    };
   }, [logFrontend]);
+
+  useTauriListen<FeedbackSettings>("settings-updated", (event) => {
+    setSoundMode(event.payload.sound_mode);
+  });
+  useTauriListen<{ mic_sensitivity: number; wave_motion_scale: number }>(
+    "spectrum-ui-settings-updated",
+    (event) => {
+      setMicSensitivity(event.payload.mic_sensitivity);
+      setWaveMotionScale(event.payload.wave_motion_scale);
+    }
+  );
 
   // Sound Helper
   const playSound = useCallback(
@@ -294,138 +290,74 @@ function FloatingStatus() {
     applyVisibility();
   }, [shouldShowWindow, logFrontend]);
 
-  // Event Listeners
-  useEffect(() => {
-    const unlisteners: Promise<() => void>[] = [];
+  // Event Listeners（useTauriListen が解除と最新ハンドラの参照を保証する）
+  const showErrorStatus = () => {
+    markActive();
+    setStatus("error");
+    setStickyError(false);
+    setErrorMessage(null);
+    playSound("error");
+  };
 
-    unlisteners.push(
-      listen("recording-starting", () => {
-        markActive();
-        setStatus("recording");
-        clearText();
-      })
-    );
+  useTauriListen("recording-starting", () => {
+    markActive();
+    setStatus("recording");
+    clearText();
+  });
+  useTauriListen("recording-started", () => {
+    markActive();
+    setStatus("recording");
+    clearText();
+    playSound("start");
+  });
+  useTauriListen("recording-stopped", () => {
+    markActive();
+    setStatus("transcribing");
+    clearText();
+    playSound("stop");
+  });
+  useTauriListen("recording-skipped", resetToIdle);
+  useTauriListen("partial-transcription", markActive);
+  useTauriListen<string>("transcription-completed", () => {
+    // AI処理や貼り付け完了までローディングを維持する
+  });
+  useTauriListen("transcription-cancelled", resetToIdle);
+  useTauriListen("paste-completed", () => {
+    // 完了表示は不要。サウンドのみ鳴らし、すぐ非表示。
+    playSound("success");
+    resetToIdle();
+  });
+  useTauriListen("copy-completed", () => {
+    playSound("success");
+    resetToIdle();
+  });
+  useTauriListen("recording-error", showErrorStatus);
+  useTauriListen("transcription-failed", showErrorStatus);
+  useTauriListen("paste-failed", showErrorStatus);
+  useTauriListen<string>("whisper-runtime-missing", (event) => {
+    markActive();
+    setStatus("error");
+    setStickyError(true);
+    setErrorMessage(event.payload || WHISPER_RUNTIME_MISSING_GUIDANCE_MESSAGE);
+    playSound("error");
+  });
+  useTauriListen<number>("audio-level", (e) => {
+    const raw = Math.max(0, Math.min(1, e.payload));
+    lastAudioEventAtRef.current = Date.now();
+    // 絶対音量をそのまま表示し、小音量だけ固定ゲートで除外する
+    const sensitiveRaw = Math.max(0, Math.min(1, raw * micSensitivity));
+    const absoluteLevel = sensitiveRaw <= AUDIO_GATE ? 0 : (sensitiveRaw - AUDIO_GATE) / (1 - AUDIO_GATE);
+    absoluteAudioLevelRef.current = Math.max(0, Math.min(1, absoluteLevel));
 
-    unlisteners.push(
-      listen("recording-started", () => {
-        markActive();
-        setStatus("recording");
-        clearText();
-        playSound("start");
-      })
-    );
-
-    unlisteners.push(
-      listen("recording-stopped", () => {
-        markActive();
-        setStatus("transcribing");
-        clearText();
-        playSound("stop");
-      })
-    );
-
-    unlisteners.push(
-      listen("recording-skipped", () => {
-        resetToIdle();
-      })
-    );
-
-    unlisteners.push(
-      listen("partial-transcription", () => {
-        markActive();
-      })
-    );
-
-    unlisteners.push(
-      listen<string>("transcription-completed", () => {
-        // AI処理や貼り付け完了までローディングを維持する
-      })
-    );
-    unlisteners.push(
-      listen("transcription-cancelled", () => {
-        resetToIdle();
-      })
-    );
-
-    unlisteners.push(
-      listen("paste-completed", () => {
-        // 完了表示は不要。サウンドのみ鳴らし、すぐ非表示。
-        playSound("success");
-        resetToIdle();
-      })
-    );
-
-    unlisteners.push(
-      listen("copy-completed", () => {
-        playSound("success");
-        resetToIdle();
-      })
-    );
-
-    unlisteners.push(
-      listen("recording-error", () => {
-        markActive();
-        setStatus("error");
-        setStickyError(false);
-        setErrorMessage(null);
-        playSound("error");
-      })
-    );
-
-    unlisteners.push(
-      listen("transcription-failed", () => {
-        markActive();
-        setStatus("error");
-        setStickyError(false);
-        setErrorMessage(null);
-        playSound("error");
-      })
-    );
-
-    unlisteners.push(
-      listen("paste-failed", () => {
-        markActive();
-        setStatus("error");
-        setStickyError(false);
-        setErrorMessage(null);
-        playSound("error");
-      })
-    );
-
-    unlisteners.push(
-      listen<string>("whisper-runtime-missing", (event) => {
-        markActive();
-        setStatus("error");
-        setStickyError(true);
-        setErrorMessage(event.payload || WHISPER_RUNTIME_MISSING_GUIDANCE_MESSAGE);
-        playSound("error");
-      })
-    );
-
-    unlisteners.push(
-      listen<number>("audio-level", (e) => {
-        const raw = Math.max(0, Math.min(1, e.payload));
-        lastAudioEventAtRef.current = Date.now();
-        // 絶対音量をそのまま表示し、小音量だけ固定ゲートで除外する
-        const sensitiveRaw = Math.max(0, Math.min(1, raw * micSensitivity));
-        const absoluteLevel = sensitiveRaw <= AUDIO_GATE ? 0 : (sensitiveRaw - AUDIO_GATE) / (1 - AUDIO_GATE);
-        absoluteAudioLevelRef.current = Math.max(0, Math.min(1, absoluteLevel));
-
-        // 一時調査ログ: 実音量の絶対値が届いているか低頻度で出力
-        const now = Date.now();
-        if (now - lastAudioLogAtRef.current > 1200) {
-          lastAudioLogAtRef.current = now;
-          invoke("log_frontend_event", {
-            message: `audio-level raw=${raw.toFixed(4)} sensitive=${sensitiveRaw.toFixed(4)} gate=${AUDIO_GATE.toFixed(4)} absolute=${absoluteAudioLevelRef.current.toFixed(4)}`,
-          }).catch(() => {});
-        }
-      })
-    );
-
-    return () => {
-      unlisteners.forEach((p) => p.then((f) => f()));
-    };
-  }, [clearText, playSound, resetToIdle, logFrontend, markActive, micSensitivity]);
+    // 一時調査ログ: 実音量の絶対値が届いているか低頻度で出力
+    const now = Date.now();
+    if (now - lastAudioLogAtRef.current > 1200) {
+      lastAudioLogAtRef.current = now;
+      invoke("log_frontend_event", {
+        message: `audio-level raw=${raw.toFixed(4)} sensitive=${sensitiveRaw.toFixed(4)} gate=${AUDIO_GATE.toFixed(4)} absolute=${absoluteAudioLevelRef.current.toFixed(4)}`,
+      }).catch(() => {});
+    }
+  });
 
   useEffect(() => {
     if (!isActive) {

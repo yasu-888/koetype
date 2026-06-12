@@ -382,23 +382,13 @@ pub(crate) async fn install_whisper_model(app: AppHandle) -> Result<String, Stri
 
 #[tauri::command]
 pub(crate) fn get_stt_provider() -> String {
-    match crate::config::get_stt_provider() {
-        SttProvider::Gemini => "gemini".to_string(),
-        SttProvider::Hybrid => "hybrid".to_string(),
-        SttProvider::Collaborate => "collaborate".to_string(),
-        SttProvider::Whisper => "whisper".to_string(),
-    }
+    crate::config::get_stt_provider().as_str().to_string()
 }
 
 #[tauri::command]
 pub(crate) fn set_stt_provider(app: AppHandle, provider: String) -> Result<String, String> {
-    let parsed = match provider.as_str() {
-        "gemini" => SttProvider::Gemini,
-        "hybrid" => SttProvider::Hybrid,
-        "collaborate" => SttProvider::Collaborate,
-        "whisper" => SttProvider::Whisper,
-        _ => return Err(format!("未対応の文字起こしプロバイダです: {}", provider)),
-    };
+    let parsed = SttProvider::parse(&provider)
+        .ok_or_else(|| format!("未対応の文字起こしプロバイダです: {}", provider))?;
 
     crate::config::set_stt_provider(parsed.clone()).map_err(|e| e.to_string())?;
 

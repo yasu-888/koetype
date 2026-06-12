@@ -48,41 +48,24 @@ impl HistoryManager {
         Ok(())
     }
 
-    /// 履歴ファイルのパスを取得
     fn get_history_path() -> PathBuf {
-        let mut path = crate::config::settings::get_app_home_dir();
-        path.push("history.json");
-        path
+        crate::util::app_data_file("history.json")
     }
 
     fn get_stats_path() -> PathBuf {
-        let mut path = crate::config::settings::get_app_home_dir();
-        path.push("stats.json");
-        path
+        crate::util::app_data_file("stats.json")
     }
 
     fn get_daily_usage_path() -> PathBuf {
-        let mut path = crate::config::settings::get_app_home_dir();
-        path.push("daily_usage.json");
-        path
+        crate::util::app_data_file("daily_usage.json")
     }
 
     fn save_stats_snapshot(stats: &StatsSnapshot) -> Result<(), String> {
-        let path = Self::get_stats_path();
-        let content = serde_json::to_string_pretty(&stats)
-            .map_err(|e| format!("stats JSON変換エラー: {}", e))?;
-        fs::write(path, content).map_err(|e| format!("stats ファイル書き込みエラー: {}", e))?;
-        Ok(())
+        crate::util::save_json_pretty(&Self::get_stats_path(), stats, "stats")
     }
 
     fn load_stats_snapshot_internal() -> StatsSnapshot {
-        let path = Self::get_stats_path();
-        if !path.exists() {
-            return StatsSnapshot::default();
-        }
-
-        let content = fs::read_to_string(path).unwrap_or_default();
-        serde_json::from_str(&content).unwrap_or_default()
+        crate::util::load_json_or_default(&Self::get_stats_path())
     }
 
     fn update_stats_snapshot_for_entry(text: &str, duration_ms: u64) -> Result<(), String> {
@@ -113,22 +96,11 @@ impl HistoryManager {
     }
 
     fn save_daily_usage(points: &[DailyUsagePoint]) -> Result<(), String> {
-        let path = Self::get_daily_usage_path();
-        let content = serde_json::to_string_pretty(points)
-            .map_err(|e| format!("daily_usage JSON変換エラー: {}", e))?;
-        fs::write(path, content)
-            .map_err(|e| format!("daily_usage ファイル書き込みエラー: {}", e))?;
-        Ok(())
+        crate::util::save_json_pretty(&Self::get_daily_usage_path(), points, "daily_usage")
     }
 
     fn load_daily_usage_internal() -> Vec<DailyUsagePoint> {
-        let path = Self::get_daily_usage_path();
-        if !path.exists() {
-            return Vec::new();
-        }
-
-        let content = fs::read_to_string(path).unwrap_or_default();
-        serde_json::from_str(&content).unwrap_or_default()
+        crate::util::load_json_or_default(&Self::get_daily_usage_path())
     }
 
     fn date_key_from_timestamp(timestamp: i64) -> String {
@@ -210,13 +182,8 @@ impl HistoryManager {
 
     /// 履歴を読み込む（自動クリーンアップ付き）
     pub fn load_history() -> Vec<HistoryItem> {
-        let path = Self::get_history_path();
-        if !path.exists() {
-            return Vec::new();
-        }
-
-        let content = fs::read_to_string(path).unwrap_or_default();
-        let mut history: Vec<HistoryItem> = serde_json::from_str(&content).unwrap_or_default();
+        let mut history: Vec<HistoryItem> =
+            crate::util::load_json_or_default(&Self::get_history_path());
 
         // 保持期間（30日）を超えた履歴を自動削除
         let now = crate::util::current_unix_timestamp_secs() as i64;
@@ -235,11 +202,7 @@ impl HistoryManager {
 
     /// 履歴を保存
     fn save_history(history: &[HistoryItem]) -> Result<(), String> {
-        let path = Self::get_history_path();
-        let content =
-            serde_json::to_string_pretty(history).map_err(|e| format!("JSON変換エラー: {}", e))?;
-        fs::write(path, content).map_err(|e| format!("ファイル書き込みエラー: {}", e))?;
-        Ok(())
+        crate::util::save_json_pretty(&Self::get_history_path(), history, "履歴")
     }
 
     /// LLMテキストとOS標準テキストを同時に保存する新しい関数

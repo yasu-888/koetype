@@ -14,6 +14,9 @@ const MAX_DICTIONARY_ENTRIES: usize = 800;
 const DEFAULT_MIC_SENSITIVITY: f64 = 1.0;
 const DEFAULT_WAVE_MOTION_SCALE: f64 = 1.0;
 
+// UI で提示するマイク感度のプリセット。保存値はこのいずれかに正規化される。
+const MIC_SENSITIVITY_PRESETS: [f64; 3] = [0.5, 1.0, 3.0];
+
 fn sanitize_token(token: &str) -> String {
     token
         .trim_matches(|c: char| c.is_whitespace() || c == '\u{00a0}')
@@ -81,6 +84,7 @@ pub enum SttProvider {
     Hybrid,
     #[serde(rename = "collaborate")]
     Collaborate,
+    // alias は旧設定ファイル（whisper-turbo 時代）との後方互換のため残す
     #[serde(rename = "whisper", alias = "whisper-turbo")]
     Whisper,
 }
@@ -100,6 +104,29 @@ impl Default for InputDeliveryMode {
 impl Default for SttProvider {
     fn default() -> Self {
         DEFAULT_STT_PROVIDER
+    }
+}
+
+impl SttProvider {
+    /// 履歴などへ保存する識別子。serde の rename 値と一致させること。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini",
+            Self::Hybrid => "hybrid",
+            Self::Collaborate => "collaborate",
+            Self::Whisper => "whisper",
+        }
+    }
+
+    /// as_str の逆変換。未知の値は None（旧設定の "whisper-turbo" は serde 側の alias で吸収する）。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "gemini" => Some(Self::Gemini),
+            "hybrid" => Some(Self::Hybrid),
+            "collaborate" => Some(Self::Collaborate),
+            "whisper" => Some(Self::Whisper),
+            _ => None,
+        }
     }
 }
 
@@ -240,6 +267,33 @@ fn platform_settings_mut(settings: &mut AppSettings) -> Option<&mut PlatformSett
 
     #[allow(unreachable_code)]
     None
+}
+
+/// プラットフォーム別設定（mac/win）を優先し、なければグローバル設定へフォールバックして読む。
+fn read_setting<T>(
+    pick_platform: impl FnOnce(&PlatformSettings) -> Option<T>,
+    pick_global: impl FnOnce(AppSettings) -> Option<T>,
+) -> Option<T> {
+    let settings = load_settings();
+    if let Some(value) = platform_settings(&settings).and_then(pick_platform) {
+        return Some(value);
+    }
+    pick_global(settings)
+}
+
+/// プラットフォーム別設定（mac/win）があればそこへ、なければグローバル設定へ書いて保存する。
+fn write_setting<T>(
+    value: T,
+    set_platform: impl FnOnce(&mut PlatformSettings, T),
+    set_global: impl FnOnce(&mut AppSettings, T),
+) -> Result<(), ConfigError> {
+    let mut settings = load_settings();
+    if let Some(platform) = platform_settings_mut(&mut settings) {
+        set_platform(platform, value);
+    } else {
+        set_global(&mut settings, value);
+    }
+    save_settings(&settings)
 }
 
 pub fn get_app_home_dir() -> PathBuf {
@@ -422,119 +476,86 @@ pub fn get_api_key() -> Result<String, ConfigError> {
 
 /// 使用する文字起こしプロバイダを保存
 pub fn set_stt_provider(provider: SttProvider) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.stt_provider = Some(provider);
-    } else {
-        settings.stt_provider = Some(provider);
-    }
-    save_settings(&settings)
+    write_setting(
+        provider,
+        |p, v| p.stt_provider = Some(v),
+        |s, v| s.stt_provider = Some(v),
+    )
 }
 
 /// 使用する文字起こしプロバイダを取得
 pub fn get_stt_provider() -> SttProvider {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.stt_provider)
-        .or(settings.stt_provider)
-        .unwrap_or(DEFAULT_STT_PROVIDER)
+    read_setting(|p| p.stt_provider, |s| s.stt_provider).unwrap_or(DEFAULT_STT_PROVIDER)
 }
 
 /// 使用するモデルを保存
 pub fn set_model(model: &str) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.model = Some(model.to_string());
-    } else {
-        settings.model = Some(model.to_string());
-    }
-    save_settings(&settings)
+    write_setting(
+        model.to_string(),
+        |p, v| p.model = Some(v),
+        |s, v| s.model = Some(v),
+    )
 }
 
 /// AI処理用モデルを保存
 pub fn set_ai_model(model: &str) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.ai_model = Some(model.to_string());
-    } else {
-        settings.ai_model = Some(model.to_string());
-    }
-    save_settings(&settings)
+    write_setting(
+        model.to_string(),
+        |p, v| p.ai_model = Some(v),
+        |s, v| s.ai_model = Some(v),
+    )
 }
 
 /// Whisperモデルパスを設定
 pub fn set_whisper_model_path(model_path: Option<String>) -> Result<(), ConfigError> {
-    let normalized = non_empty_trimmed(model_path);
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.whisper_model_path = normalized.clone();
-    } else {
-        settings.whisper_model_path = normalized;
-    }
-    save_settings(&settings)
+    write_setting(
+        non_empty_trimmed(model_path),
+        |p, v| p.whisper_model_path = v,
+        |s, v| s.whisper_model_path = v,
+    )
 }
 
 /// 使用するモデルを取得
 pub fn get_model() -> String {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.model.clone())
-        .or(settings.model)
+    read_setting(|p| p.model.clone(), |s| s.model)
         .unwrap_or_else(|| DEFAULT_MODEL.to_string())
 }
 
 /// AI処理用モデルを取得
 pub fn get_ai_model() -> String {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.ai_model.clone())
-        .or(settings.ai_model)
+    read_setting(|p| p.ai_model.clone(), |s| s.ai_model)
         .unwrap_or_else(|| DEFAULT_AI_MODEL.to_string())
 }
 
-/// 通知モードを設定 - 通知機能を無効化しているためコメントアウト
-// pub fn set_notification_mode(mode: FeedbackMode) -> Result<(), ConfigError> {
-//     let mut settings = load_settings();
-//     if let Some(platform) = platform_settings_mut(&mut settings) {
-//         platform.notification_mode = Some(mode.clone());
-//     } else {
-//         settings.notification_mode = mode;
-//     }
-//     save_settings(&settings)
-// }
-
 /// 通知モードを取得
+/// 通知機能は現在無効化しているため setter は提供しない。
+/// get はトレイ表示・設定画面の状態表示用に残している。
 pub fn get_notification_mode() -> FeedbackMode {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.notification_mode.clone())
-        .unwrap_or(settings.notification_mode)
+    read_setting(
+        |p| p.notification_mode.clone(),
+        |s| Some(s.notification_mode),
+    )
+    .unwrap_or_default()
 }
 
 /// 音声モードを設定
 pub fn set_sound_mode(mode: FeedbackMode) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.sound_mode = Some(mode.clone());
-    } else {
-        settings.sound_mode = mode;
-    }
-    save_settings(&settings)
+    write_setting(
+        mode,
+        |p, v| p.sound_mode = Some(v),
+        |s, v| s.sound_mode = v,
+    )
 }
 
 /// 音声モードを取得
 pub fn get_sound_mode() -> FeedbackMode {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.sound_mode.clone())
-        .unwrap_or(settings.sound_mode)
+    read_setting(|p| p.sound_mode.clone(), |s| Some(s.sound_mode)).unwrap_or_default()
 }
 
 pub fn normalize_mic_sensitivity(value: f64) -> f64 {
-    let presets = [0.5_f64, 1.0_f64, 3.0_f64];
-    let mut best = presets[0];
+    let mut best = MIC_SENSITIVITY_PRESETS[0];
     let mut best_distance = (value - best).abs();
-    for preset in presets.iter().copied().skip(1) {
+    for preset in MIC_SENSITIVITY_PRESETS.iter().copied().skip(1) {
         let distance = (value - preset).abs();
         if distance < best_distance {
             best = preset;
@@ -549,143 +570,112 @@ pub fn normalize_wave_motion_scale(value: f64) -> f64 {
 }
 
 pub fn get_mic_sensitivity() -> f64 {
-    let settings = load_settings();
     normalize_mic_sensitivity(
-        platform_settings(&settings)
-            .and_then(|p| p.mic_sensitivity)
-            .or(settings.mic_sensitivity)
+        read_setting(|p| p.mic_sensitivity, |s| s.mic_sensitivity)
             .unwrap_or(DEFAULT_MIC_SENSITIVITY),
     )
 }
 
 pub fn set_mic_sensitivity(value: f64) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    let normalized = normalize_mic_sensitivity(value);
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.mic_sensitivity = Some(normalized);
-    } else {
-        settings.mic_sensitivity = Some(normalized);
-    }
-    save_settings(&settings)
+    write_setting(
+        normalize_mic_sensitivity(value),
+        |p, v| p.mic_sensitivity = Some(v),
+        |s, v| s.mic_sensitivity = Some(v),
+    )
 }
 
 pub fn get_wave_motion_scale() -> f64 {
-    let settings = load_settings();
     normalize_wave_motion_scale(
-        platform_settings(&settings)
-            .and_then(|p| p.wave_motion_scale)
-            .or(settings.wave_motion_scale)
+        read_setting(|p| p.wave_motion_scale, |s| s.wave_motion_scale)
             .unwrap_or(DEFAULT_WAVE_MOTION_SCALE),
     )
 }
 
 pub fn set_wave_motion_scale(value: f64) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    let normalized = normalize_wave_motion_scale(value);
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.wave_motion_scale = Some(normalized);
-    } else {
-        settings.wave_motion_scale = Some(normalized);
-    }
-    save_settings(&settings)
+    write_setting(
+        normalize_wave_motion_scale(value),
+        |p, v| p.wave_motion_scale = Some(v),
+        |s, v| s.wave_motion_scale = Some(v),
+    )
 }
 
 pub fn get_input_delivery_mode() -> InputDeliveryMode {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.input_delivery_mode.clone())
-        .unwrap_or(settings.input_delivery_mode)
+    read_setting(
+        |p| p.input_delivery_mode.clone(),
+        |s| Some(s.input_delivery_mode),
+    )
+    .unwrap_or_default()
 }
 
 pub fn set_input_delivery_mode(mode: InputDeliveryMode) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.input_delivery_mode = Some(mode.clone());
-    } else {
-        settings.input_delivery_mode = mode;
-    }
-    save_settings(&settings)
+    write_setting(
+        mode,
+        |p, v| p.input_delivery_mode = Some(v),
+        |s, v| s.input_delivery_mode = v,
+    )
 }
 
 /// 選択中のマイクデバイスを設定
 pub fn set_selected_microphone(device_name: Option<String>) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
+    write_setting(
+        device_name,
         // TOML は null を表現できないため Some(None) を保存しない。
         // 未選択（None）は項目自体を未設定に戻す。
-        platform.selected_microphone = device_name.map(Some);
-    } else {
-        settings.selected_microphone = device_name;
-    }
-    save_settings(&settings)
+        |p, v| p.selected_microphone = v.map(Some),
+        |s, v| s.selected_microphone = v,
+    )
 }
 
 /// 選択中のマイクデバイスを取得
 pub fn get_selected_microphone() -> Option<String> {
-    let settings = load_settings();
-    if let Some(value) = platform_settings(&settings).and_then(|p| p.selected_microphone.clone()) {
-        return value;
-    }
-    settings.selected_microphone
+    read_setting(
+        |p| p.selected_microphone.clone(),
+        |s| Some(s.selected_microphone),
+    )
+    .flatten()
 }
 
 /// 言語を設定
 pub fn set_language(language: &str) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.language = Some(language.to_string());
-    } else {
-        settings.language = Some(language.to_string());
-    }
-    save_settings(&settings)
+    write_setting(
+        language.to_string(),
+        |p, v| p.language = Some(v),
+        |s, v| s.language = Some(v),
+    )
 }
 
 /// 言語を取得
 pub fn get_language() -> String {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.language.clone())
-        .or(settings.language)
-        .unwrap_or_else(|| "ja".to_string())
+    read_setting(|p| p.language.clone(), |s| s.language).unwrap_or_else(|| "ja".to_string())
 }
 
 /// 最短入力時間（ms）を設定
 pub fn set_min_input_duration_ms(duration_ms: u64) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.min_input_duration_ms = Some(duration_ms);
-    } else {
-        settings.min_input_duration_ms = Some(duration_ms);
-    }
-    save_settings(&settings)
+    write_setting(
+        duration_ms,
+        |p, v| p.min_input_duration_ms = Some(v),
+        |s, v| s.min_input_duration_ms = Some(v),
+    )
 }
 
 /// 最短入力時間（ms）を取得
 pub fn get_min_input_duration_ms() -> u64 {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.min_input_duration_ms)
-        .or(settings.min_input_duration_ms)
+    read_setting(|p| p.min_input_duration_ms, |s| s.min_input_duration_ms)
         .unwrap_or(DEFAULT_MIN_INPUT_DURATION_MS)
 }
 
 /// HybridモードのWhisper判定閾値（ms）を設定
 pub fn set_hybrid_threshold_ms(duration_ms: u64) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.hybrid_threshold_ms = Some(duration_ms);
-    } else {
-        settings.hybrid_threshold_ms = Some(duration_ms);
-    }
-    save_settings(&settings)
+    write_setting(
+        duration_ms,
+        |p, v| p.hybrid_threshold_ms = Some(v),
+        |s, v| s.hybrid_threshold_ms = Some(v),
+    )
 }
 
 /// HybridモードのWhisper判定閾値（ms）を取得
 pub fn get_hybrid_threshold_ms() -> u64 {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.hybrid_threshold_ms)
-        .or(settings.hybrid_threshold_ms)
+    read_setting(|p| p.hybrid_threshold_ms, |s| s.hybrid_threshold_ms)
         .unwrap_or(DEFAULT_HYBRID_THRESHOLD_MS)
 }
 
@@ -828,10 +818,8 @@ fn normalize_path_list(values: Vec<String>) -> Vec<String> {
 
 /// ショートカット設定を取得
 pub fn get_shortcut_settings() -> ShortcutSettings {
-    let settings = load_settings();
-    let shortcuts = platform_settings(&settings)
-        .and_then(|p| p.shortcuts.clone())
-        .unwrap_or(settings.shortcuts);
+    let shortcuts =
+        read_setting(|p| p.shortcuts.clone(), |s| Some(s.shortcuts)).unwrap_or_default();
     normalize_shortcuts_internal(shortcuts)
 }
 
@@ -841,13 +829,11 @@ pub fn set_shortcut_settings(shortcuts: ShortcutSettings) -> Result<(), ConfigEr
         input_shortcut: validate_shortcut(&shortcuts.input_shortcut)?,
         os_paste_shortcut: validate_shortcut(&shortcuts.os_paste_shortcut)?,
     };
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.shortcuts = Some(validated);
-    } else {
-        settings.shortcuts = validated;
-    }
-    save_settings(&settings)
+    write_setting(
+        validated,
+        |p, v| p.shortcuts = Some(v),
+        |s, v| s.shortcuts = v,
+    )
 }
 
 /// プラットフォームに合わせてショートカットを正規化
@@ -856,62 +842,55 @@ pub fn normalize_shortcuts(shortcuts: ShortcutSettings) -> ShortcutSettings {
 }
 
 pub fn get_whisper_cli_path() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_cli_path.clone())
-        .or(settings.whisper_cli_path);
-    non_empty_trimmed(value)
+    non_empty_trimmed(read_setting(
+        |p| p.whisper_cli_path.clone(),
+        |s| s.whisper_cli_path,
+    ))
 }
 
 pub fn get_whisper_model_path() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_model_path.clone())
-        .or(settings.whisper_model_path);
-    non_empty_trimmed(value)
+    non_empty_trimmed(read_setting(
+        |p| p.whisper_model_path.clone(),
+        |s| s.whisper_model_path,
+    ))
 }
 
 pub fn get_whisper_model_paths() -> Vec<String> {
-    let settings = load_settings();
-    let values = platform_settings(&settings)
-        .and_then(|p| p.whisper_model_paths.clone())
-        .or(settings.whisper_model_paths)
-        .unwrap_or_default();
+    let values = read_setting(
+        |p| p.whisper_model_paths.clone(),
+        |s| s.whisper_model_paths,
+    )
+    .unwrap_or_default();
     normalize_path_list(values)
 }
 
 pub fn set_whisper_model_paths(paths: Vec<String>) -> Result<(), ConfigError> {
-    let normalized = normalize_path_list(paths);
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.whisper_model_paths = Some(normalized);
-    } else {
-        settings.whisper_model_paths = Some(normalized);
-    }
-    save_settings(&settings)
+    write_setting(
+        normalize_path_list(paths),
+        |p, v| p.whisper_model_paths = Some(v),
+        |s, v| s.whisper_model_paths = Some(v),
+    )
 }
 
 pub fn get_whisper_output_dir() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_output_dir.clone())
-        .or(settings.whisper_output_dir);
-    non_empty_trimmed(value)
+    non_empty_trimmed(read_setting(
+        |p| p.whisper_output_dir.clone(),
+        |s| s.whisper_output_dir,
+    ))
 }
 
 pub fn get_whisper_log_dir() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_log_dir.clone())
-        .or(settings.whisper_log_dir);
-    non_empty_trimmed(value)
+    non_empty_trimmed(read_setting(
+        |p| p.whisper_log_dir.clone(),
+        |s| s.whisper_log_dir,
+    ))
 }
 
 pub fn get_whisper_language() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_language.clone())
-        .or(settings.whisper_language);
+    let value = read_setting(
+        |p| p.whisper_language.clone(),
+        |s| s.whisper_language,
+    );
     let lang = non_empty_trimmed(value)?;
     match lang.as_str() {
         "auto" | "ja" | "en" => Some(lang),
@@ -933,52 +912,155 @@ pub fn resolve_whisper_language() -> String {
 }
 
 pub fn get_whisper_transcripts_path() -> Option<String> {
-    let settings = load_settings();
-    let value = platform_settings(&settings)
-        .and_then(|p| p.whisper_transcripts_path.clone())
-        .or(settings.whisper_transcripts_path);
-    non_empty_trimmed(value)
+    non_empty_trimmed(read_setting(
+        |p| p.whisper_transcripts_path.clone(),
+        |s| s.whisper_transcripts_path,
+    ))
 }
 
+// onboarding 状態は OS ごとに独立して管理する（グローバル設定へフォールバックしない）。
+// 同じ config.toml を mac/win で共有しても、初回セットアップは各 OS で個別に完了させたいため。
+
 pub fn get_onboarding_ack_unnotarized() -> bool {
-    let settings = load_settings();
-    platform_settings(&settings)
-        .and_then(|p| p.onboarding_ack_unnotarized)
-        .unwrap_or(false)
+    read_setting(|p| p.onboarding_ack_unnotarized, |_| None).unwrap_or(false)
 }
 
 pub fn set_onboarding_ack_unnotarized(ack: bool) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.onboarding_ack_unnotarized = Some(ack);
-    }
-    save_settings(&settings)
+    write_setting(ack, |p, v| p.onboarding_ack_unnotarized = Some(v), |_, _| {})
 }
 
 pub fn get_onboarding_completed_at() -> Option<i64> {
-    let settings = load_settings();
-    platform_settings(&settings).and_then(|p| p.onboarding_completed_at)
+    read_setting(|p| p.onboarding_completed_at, |_| None)
 }
 
 pub fn set_onboarding_completed_now() -> Result<(), ConfigError> {
-    let mut settings = load_settings();
     let now = crate::util::current_unix_timestamp_secs() as i64;
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.onboarding_completed_at = Some(now);
-    }
-    save_settings(&settings)
+    write_setting(now, |p, v| p.onboarding_completed_at = Some(v), |_, _| {})
 }
 
 pub fn get_onboarding_permission_probe_ok() -> Option<bool> {
-    let settings = load_settings();
-    platform_settings(&settings).and_then(|p| p.onboarding_permission_probe_ok)
+    read_setting(|p| p.onboarding_permission_probe_ok, |_| None)
 }
 
 #[cfg(target_os = "macos")]
 pub fn set_onboarding_permission_probe_ok(ok: bool) -> Result<(), ConfigError> {
-    let mut settings = load_settings();
-    if let Some(platform) = platform_settings_mut(&mut settings) {
-        platform.onboarding_permission_probe_ok = Some(ok);
+    write_setting(
+        ok,
+        |p, v| p.onboarding_permission_probe_ok = Some(v),
+        |_, _| {},
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- validate_shortcut: ショートカット文字列の正規化仕様 ---
+
+    #[test]
+    fn validate_shortcut_normalizes_alias_names() {
+        assert_eq!(validate_shortcut("ctrl+shift+x").unwrap(), "Control+Shift+X");
+        assert_eq!(validate_shortcut("cmd+v").unwrap(), "Super+V");
+        assert_eq!(validate_shortcut("alt+space").unwrap(), "Option+space");
     }
-    save_settings(&settings)
+
+    #[test]
+    fn validate_shortcut_keeps_modifier_order_and_dedupes() {
+        assert_eq!(
+            validate_shortcut("shift+ctrl+shift+a").unwrap(),
+            "Shift+Control+A"
+        );
+    }
+
+    #[test]
+    fn validate_shortcut_trims_whitespace_and_nbsp() {
+        assert_eq!(
+            validate_shortcut(" Option +\u{00a0}Space ").unwrap(),
+            "Option+Space"
+        );
+    }
+
+    #[test]
+    fn validate_shortcut_rejects_modifier_only() {
+        assert!(validate_shortcut("Control+Shift").is_err());
+    }
+
+    #[test]
+    fn validate_shortcut_rejects_empty() {
+        assert!(validate_shortcut(" + ").is_err());
+        assert!(validate_shortcut("").is_err());
+    }
+
+    // --- 不正なショートカット設定はプラットフォーム既定値へフォールバックする ---
+
+    #[test]
+    fn invalid_saved_shortcut_falls_back_to_platform_default() {
+        let normalized = normalize_shortcuts_internal(ShortcutSettings {
+            input_shortcut: "Shift".to_string(),
+            os_paste_shortcut: "Control+Shift+V".to_string(),
+        });
+        assert_eq!(normalized.input_shortcut, default_input_shortcut());
+        assert_eq!(normalized.os_paste_shortcut, "Control+Shift+V");
+    }
+
+    // --- マイク感度はプリセット（0.5 / 1.0 / 3.0）へスナップする ---
+
+    #[test]
+    fn mic_sensitivity_snaps_to_nearest_preset() {
+        assert_eq!(normalize_mic_sensitivity(0.4), 0.5);
+        assert_eq!(normalize_mic_sensitivity(0.8), 1.0);
+        assert_eq!(normalize_mic_sensitivity(2.4), 3.0);
+        assert_eq!(normalize_mic_sensitivity(100.0), 3.0);
+        assert_eq!(normalize_mic_sensitivity(-5.0), 0.5);
+    }
+
+    // --- 波形モーションスケールは四捨五入後 1〜10 にクランプする ---
+
+    #[test]
+    fn wave_motion_scale_rounds_and_clamps() {
+        assert_eq!(normalize_wave_motion_scale(0.2), 1.0);
+        assert_eq!(normalize_wave_motion_scale(5.4), 5.0);
+        assert_eq!(normalize_wave_motion_scale(5.6), 6.0);
+        assert_eq!(normalize_wave_motion_scale(99.0), 10.0);
+    }
+
+    // --- パスリストは空白除去・空要素除外・重複排除して順序を保持する ---
+
+    #[test]
+    fn normalize_path_list_dedupes_and_drops_blank() {
+        let result = normalize_path_list(vec![
+            " /a/model.bin ".to_string(),
+            "".to_string(),
+            "/b/model.bin".to_string(),
+            "/a/model.bin".to_string(),
+        ]);
+        assert_eq!(result, vec!["/a/model.bin", "/b/model.bin"]);
+    }
+
+    // --- SttProvider::as_str は serde の rename 値（設定ファイル上の表記）と一致する ---
+
+    #[test]
+    fn stt_provider_as_str_matches_serde_rename() {
+        for provider in [
+            SttProvider::Gemini,
+            SttProvider::Hybrid,
+            SttProvider::Collaborate,
+            SttProvider::Whisper,
+        ] {
+            let serialized = serde_json::to_string(&provider).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", provider.as_str()));
+            assert_eq!(SttProvider::parse(provider.as_str()), Some(provider));
+        }
+        assert_eq!(SttProvider::parse("unknown"), None);
+    }
+
+    #[test]
+    fn non_empty_trimmed_filters_blank_values() {
+        assert_eq!(non_empty_trimmed(Some("  ".to_string())), None);
+        assert_eq!(non_empty_trimmed(None), None);
+        assert_eq!(
+            non_empty_trimmed(Some(" /path ".to_string())),
+            Some("/path".to_string())
+        );
+    }
 }

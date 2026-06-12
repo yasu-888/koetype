@@ -184,10 +184,43 @@ pub fn get_frontmost_app_bundle_id() -> Option<String> {
     None
 }
 
+/// Enigo の初期化は権限不足などの環境要因で panic することがあるため、
+/// catch_unwind で包んで常駐プロセスを巻き込まないようにする。
+fn init_enigo_catching_panic() -> Result<Enigo, String> {
+    match std::panic::catch_unwind(|| Enigo::new(&Settings::default())) {
+        Ok(Ok(enigo)) => Ok(enigo),
+        Ok(Err(e)) => Err(format!("Enigoの初期化に失敗: {}", e)),
+        Err(_) => Err("Enigoの初期化中にパニックが発生しました".to_string()),
+    }
+}
+
+/// 修飾キー + キーのショートカットを Enigo で送出する。
+/// キークリックに失敗した場合も修飾キーを解放してから返す（押しっぱなし防止）。
+fn send_shortcut_with_modifier(
+    enigo: &mut Enigo,
+    modifier: Key,
+    key: Key,
+    interval: Duration,
+) -> Result<(), String> {
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| format!("修飾キー押下に失敗: {}", e))?;
+    thread::sleep(interval);
+    if let Err(e) = enigo.key(key, Direction::Click) {
+        let _ = enigo.key(modifier, Direction::Release);
+        return Err(format!("キークリックに失敗: {}", e));
+    }
+    thread::sleep(interval);
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| format!("修飾キー解放に失敗: {}", e))?;
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 pub fn run_enigo_probe() -> EnigoProbeResult {
-    match std::panic::catch_unwind(|| Enigo::new(&Settings::default())) {
-        Ok(Ok(mut enigo)) => {
+    match init_enigo_catching_panic() {
+        Ok(mut enigo) => {
             // Shift の押下/解放だけを試して、極力副作用を抑えつつイベント注入経路を確認する。
             if let Err(e) = enigo.key(Key::Shift, Direction::Press) {
                 return EnigoProbeResult {
@@ -207,14 +240,7 @@ pub fn run_enigo_probe() -> EnigoProbeResult {
                 message: "enigo key injection path returned Ok".to_string(),
             }
         }
-        Ok(Err(e)) => EnigoProbeResult {
-            ok: false,
-            message: format!("Enigo init failed: {}", e),
-        },
-        Err(_) => EnigoProbeResult {
-            ok: false,
-            message: "Enigo init panicked".to_string(),
-        },
+        Err(message) => EnigoProbeResult { ok: false, message },
     }
 }
 
@@ -305,93 +331,50 @@ pub fn paste_text_to_active_app(text: &str) -> Result<PasteExecutionResult, Past
 
         info!("ペースト経路: Enigo フォールバック実行開始");
         diagnostics.used_fallback = true;
-        match std::panic::catch_unwind(|| Enigo::new(&Settings::default())) {
-            Ok(Ok(mut enigo)) => {
-                // macOS: Cmd+V
-                if let Err(e) = enigo.key(Key::Meta, Direction::Press) {
-                    diagnostics.enigo_error = Some(format!("Cmd press failed: {}", e));
-                    return Err(PasteError::PasteInjection(format!(
-                        "Cmdキー押下に失敗: {}",
-                        e
-                    )));
-                }
-                thread::sleep(Duration::from_millis(50));
-                if let Err(e) = enigo.key(Key::Other(9), Direction::Click) {
-                    let _ = enigo.key(Key::Meta, Direction::Release);
-                    diagnostics.enigo_error = Some(format!("V click failed: {}", e));
-                    return Err(PasteError::PasteInjection(format!(
-                        "Vキークリックに失敗: {}",
-                        e
-                    )));
-                }
-                thread::sleep(Duration::from_millis(50));
-                if let Err(e) = enigo.key(Key::Meta, Direction::Release) {
-                    diagnostics.enigo_error = Some(format!("Cmd release failed: {}", e));
-                    return Err(PasteError::PasteInjection(format!(
-                        "Cmdキー解放に失敗: {}",
-                        e
-                    )));
-                }
+        let mut enigo = init_enigo_catching_panic().map_err(PasteError::PasteInjection)?;
+        // Key::Other(9) は macOS の仮想キーコード 9 = "V"（AppleScript 経路の key code 9 と同じ）
+        match send_shortcut_with_modifier(
+            &mut enigo,
+            Key::Meta,
+            Key::Other(9),
+            Duration::from_millis(50),
+        ) {
+            Ok(()) => {
                 info!("ペースト注入完了: method=enigo");
                 Ok(PasteExecutionResult {
                     method: "enigo".to_string(),
                     diagnostics,
                 })
             }
-            Ok(Err(e)) => Err(PasteError::PasteInjection(format!(
-                "Enigoの初期化に失敗: {}",
-                e
-            ))),
-            Err(_) => Err(PasteError::PasteInjection(
-                "Enigoの初期化中にパニックが発生しました".to_string(),
-            )),
+            Err(e) => {
+                diagnostics.enigo_error = Some(e.clone());
+                Err(PasteError::PasteInjection(e))
+            }
         }
     }
 
     #[cfg(target_os = "windows")]
     {
-        match Enigo::new(&Settings::default()) {
-            Ok(mut enigo) => {
-                // Windows: Ctrl+V
-                if let Err(e) = enigo.key(Key::Control, Direction::Press) {
-                    warn!("Ctrlキー押下に失敗: {}", e);
-                    return Err(PasteError::PasteInjection(format!(
-                        "Ctrlキー押下に失敗: {}",
-                        e
-                    )));
-                }
-
-                thread::sleep(Duration::from_millis(50));
-
-                if let Err(e) = enigo.key(Key::Unicode('v'), Direction::Click) {
-                    warn!("Vキークリックに失敗: {}", e);
-                    let _ = enigo.key(Key::Control, Direction::Release);
-                    return Err(PasteError::PasteInjection(format!(
-                        "Vキークリックに失敗: {}",
-                        e
-                    )));
-                }
-
-                thread::sleep(Duration::from_millis(50));
-
-                if let Err(e) = enigo.key(Key::Control, Direction::Release) {
-                    warn!("Ctrlキー解放に失敗: {}", e);
-                    return Err(PasteError::PasteInjection(format!(
-                        "Ctrlキー解放に失敗: {}",
-                        e
-                    )));
-                }
+        let mut enigo = init_enigo_catching_panic().map_err(|e| {
+            warn!("{}", e);
+            PasteError::PasteInjection(e)
+        })?;
+        // Windows: Ctrl+V
+        match send_shortcut_with_modifier(
+            &mut enigo,
+            Key::Control,
+            Key::Unicode('v'),
+            Duration::from_millis(50),
+        ) {
+            Ok(()) => {
                 return Ok(PasteExecutionResult {
                     method: "enigo".to_string(),
                     diagnostics: PasteMethodDiagnostics::default(),
                 });
             }
             Err(e) => {
-                warn!("Enigoの初期化に失敗: {}", e);
-                return Err(PasteError::PasteInjection(format!(
-                    "Enigoの初期化に失敗: {}",
-                    e
-                )));
+                warn!("{}", e);
+                return Err(PasteError::PasteInjection(e));
             }
         }
     }
@@ -415,34 +398,20 @@ pub fn type_text_to_active_app(text: &str) -> Result<TypeExecutionResult, PasteE
     #[cfg(target_os = "macos")]
     {
         let mut diagnostics = TypeMethodDiagnostics::default();
-        match std::panic::catch_unwind(|| Enigo::new(&Settings::default())) {
-            Ok(Ok(mut enigo)) => {
-                // Split long text to avoid large single injection stalls.
-                for chunk in text.as_bytes().chunks(400) {
-                    let s = String::from_utf8_lossy(chunk).to_string();
-                    if let Err(e) = enigo.text(&s) {
-                        diagnostics.enigo_error = Some(e.to_string());
-                        return Err(PasteError::PasteInjection(format!("直接入力に失敗: {}", e)));
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-                return Ok(TypeExecutionResult {
-                    method: "type_enigo".to_string(),
-                    diagnostics,
-                });
+        let mut enigo = init_enigo_catching_panic().map_err(PasteError::PasteInjection)?;
+        // Split long text to avoid large single injection stalls.
+        for chunk in text.as_bytes().chunks(400) {
+            let s = String::from_utf8_lossy(chunk).to_string();
+            if let Err(e) = enigo.text(&s) {
+                diagnostics.enigo_error = Some(e.to_string());
+                return Err(PasteError::PasteInjection(format!("直接入力に失敗: {}", e)));
             }
-            Ok(Err(e)) => {
-                return Err(PasteError::PasteInjection(format!(
-                    "Enigoの初期化に失敗: {}",
-                    e
-                )));
-            }
-            Err(_) => {
-                return Err(PasteError::PasteInjection(
-                    "Enigoの初期化中にパニックが発生しました".to_string(),
-                ));
-            }
+            thread::sleep(Duration::from_millis(5));
         }
+        return Ok(TypeExecutionResult {
+            method: "type_enigo".to_string(),
+            diagnostics,
+        });
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -472,51 +441,26 @@ pub fn trigger_selection_copy_shortcut() -> Result<(), CopyError> {
             }
         }
 
-        match std::panic::catch_unwind(|| Enigo::new(&Settings::default())) {
-            Ok(Ok(mut enigo)) => {
-                if let Err(e) = enigo.key(Key::Meta, Direction::Press) {
-                    return Err(CopyError::Shortcut(format!("Cmdキー押下に失敗: {}", e)));
-                }
-                thread::sleep(Duration::from_millis(40));
-                if let Err(e) = enigo.key(Key::Unicode('c'), Direction::Click) {
-                    let _ = enigo.key(Key::Meta, Direction::Release);
-                    return Err(CopyError::Shortcut(format!("Cキークリックに失敗: {}", e)));
-                }
-                thread::sleep(Duration::from_millis(40));
-                if let Err(e) = enigo.key(Key::Meta, Direction::Release) {
-                    return Err(CopyError::Shortcut(format!("Cmdキー解放に失敗: {}", e)));
-                }
-                return Ok(());
-            }
-            Ok(Err(e)) => return Err(CopyError::Shortcut(format!("Enigoの初期化に失敗: {}", e))),
-            Err(_) => {
-                return Err(CopyError::Shortcut(
-                    "Enigo initialization panicked".to_string(),
-                ))
-            }
-        }
+        let mut enigo = init_enigo_catching_panic().map_err(CopyError::Shortcut)?;
+        send_shortcut_with_modifier(
+            &mut enigo,
+            Key::Meta,
+            Key::Unicode('c'),
+            Duration::from_millis(40),
+        )
+        .map_err(CopyError::Shortcut)
     }
 
     #[cfg(target_os = "windows")]
     {
-        match Enigo::new(&Settings::default()) {
-            Ok(mut enigo) => {
-                if let Err(e) = enigo.key(Key::Control, Direction::Press) {
-                    return Err(CopyError::Shortcut(format!("Ctrlキー押下に失敗: {}", e)));
-                }
-                thread::sleep(Duration::from_millis(40));
-                if let Err(e) = enigo.key(Key::Unicode('c'), Direction::Click) {
-                    let _ = enigo.key(Key::Control, Direction::Release);
-                    return Err(CopyError::Shortcut(format!("Cキークリックに失敗: {}", e)));
-                }
-                thread::sleep(Duration::from_millis(40));
-                if let Err(e) = enigo.key(Key::Control, Direction::Release) {
-                    return Err(CopyError::Shortcut(format!("Ctrlキー解放に失敗: {}", e)));
-                }
-                Ok(())
-            }
-            Err(e) => Err(CopyError::Shortcut(format!("Enigoの初期化に失敗: {}", e))),
-        }
+        let mut enigo = init_enigo_catching_panic().map_err(CopyError::Shortcut)?;
+        send_shortcut_with_modifier(
+            &mut enigo,
+            Key::Control,
+            Key::Unicode('c'),
+            Duration::from_millis(40),
+        )
+        .map_err(CopyError::Shortcut)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
