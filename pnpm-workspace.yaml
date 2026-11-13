@@ -1,5 +1,8 @@
 packages:
   - "."
 
+allowBuilds:
+  esbuild: false
+
 ignoredBuiltDependencies:
   - esbuild
