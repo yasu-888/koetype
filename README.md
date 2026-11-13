@@ -1,3 +1,5 @@
+
+
 <!-- @format -->
 
 <div align="center">
@@ -62,6 +64,7 @@ KoeType は個人が趣味で開発・無償公開しているアプリです。
 
 ```bash
 pnpm install
+pnpm build:sidecar
 pnpm macos:prepare-whisper-bundle
 pnpm macos:rebuild-install
 ```
@@ -433,7 +436,7 @@ KOETYPE_HOME=/path/to/custom koetype
 
 ---
 
-## トラブルシューティング
+## テラブルシューティング
 
 ### 権限関連（macOS）
 
