@@ -25,8 +25,8 @@ const CREDIT_LINKS = [
   {
     id: "website",
     label: "ポートフォリオ",
-    value: "yasu.lifemate.dev",
-    url: "https://yasu.lifemate.dev/",
+    value: "yasuguin.com",
+    url: "https://yasuguin.com/",
     icon: <GlobeIcon className="w-4 h-4" weight="bold" />,
   },
   {
